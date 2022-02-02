@@ -38,6 +38,48 @@ search_forward <- function(p_ref, refmodel, nterms_max, verbose = TRUE, opt,
               submodls = submodels))
 }
 
+search_arma <- function(p_ref, refmodel, nterms_max, verbose = TRUE, opt,
+                           search_terms = NULL) {
+  iq <- ceiling(quantile(seq_len(nterms_max), 1:10 / 10))
+  if (is.null(search_terms)) {
+    allterms <- split_formula(refmodel$formula, data = refmodel$fetch_data())
+  } else {
+    allterms <- search_terms
+  }
+
+  chosen <- character()
+  total_terms <- count_terms_chosen(allterms)
+  stop_search <- min(total_terms, nterms_max)
+  submodels <- c()
+
+  for (size in seq_len(stop_search)) {
+    cands <- select_possible_terms_size(chosen, allterms, size = size)
+    # select the next lag
+    cands <- cands[1]
+    if (is.null(cands))
+      next
+    full_cands <- lapply(cands, function(cand) c(chosen, cand))
+    subL <- lapply(full_cands, project_submodel,
+                   p_ref = p_ref, refmodel = refmodel, regul = opt$regul)
+
+    ## select best candidate
+    imin <- which.min(sapply(subL, "[[", "kl"))
+    chosen <- c(chosen, cands[imin])
+
+    ## append submodels
+    submodels <- c(submodels, list(subL[[imin]]$submodl))
+
+    if (verbose && count_terms_chosen(chosen) %in% iq) {
+      print(paste0(names(iq)[max(which(count_terms_chosen(chosen) == iq))],
+                   " of terms selected."))
+    }
+  }
+
+  ## reduce chosen to a list of non-redundant accumulated models
+  return(list(solution_terms = setdiff(reduce_models(chosen), "1"),
+              submodls = submodels))
+}
+
 # copied over from search until we resolve the TODO below
 search_L1_surrogate <- function(p_ref, d_train, family, intercept, nterms_max,
                                 penalty, opt) {

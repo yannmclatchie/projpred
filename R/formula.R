@@ -697,6 +697,7 @@ select_possible_terms_size <- function(chosen, terms, size) {
       paste(x, add_chosen, remove_chosen)
     )))
   })))
+
   return(full_valid_submodels)
 }
 

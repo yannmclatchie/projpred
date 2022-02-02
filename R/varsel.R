@@ -273,6 +273,11 @@ select <- function(method, p_sel, refmodel, nterms_max, penalty, verbose, opt,
                                   search_terms = search_terms)
     search_path$p_sel <- p_sel
     return(search_path)
+} else if (method == "arma") {
+    search_path <- search_arma(p_sel, refmodel, nterms_max, verbose, opt,
+                               search_terms = search_terms)
+    search_path$p_sel <- p_sel
+    return(search_path)
   }
 }
 
@@ -307,7 +312,7 @@ parse_args_varsel <- function(refmodel, method, refit_prj, nterms_max,
     }
   }
 
-  if (!(method %in% c("l1", "forward"))) {
+  if (!(method %in% c("l1", "forward", "arma"))) {
     stop("Unknown search method")
   }
 
