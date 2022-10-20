@@ -1,4 +1,4 @@
-Package: projpred
+Package: projpredarma
 Encoding: UTF-8
 Title: Projection Predictive Feature Selection
 Version: 2.0.5.9000
@@ -62,5 +62,5 @@ Suggests:
 LinkingTo: Rcpp, RcppArmadillo
 LazyData: TRUE
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.1.2
+RoxygenNote: 7.2.1
 VignetteBuilder: knitr, rmarkdown
