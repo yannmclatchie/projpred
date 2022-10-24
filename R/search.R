@@ -80,8 +80,7 @@ search_arma <- function(p_ref, refmodel, nterms_max, verbose = TRUE, opt,
   }
 
   ## reduce chosen to a list of non-redundant accumulated models
-  return(list(solution_terms = setdiff(reduce_models(chosen), "1"),
-              submodls = submodels))
+  return(nlist(solution_terms = setdiff(chosen, "1"), submodls))
 }
 
 # copied over from search until we resolve the TODO below
