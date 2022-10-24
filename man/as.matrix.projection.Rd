@@ -4,17 +4,22 @@
 \alias{as.matrix.projection}
 \title{Extract projected parameter draws}
 \usage{
-\method{as.matrix}{projection}(x, ...)
+\method{as.matrix}{projection}(x, nm_scheme = "auto", ...)
 }
 \arguments{
 \item{x}{An object of class \code{projection} (returned by \code{\link[=project]{project()}}, possibly
 as elements of a \code{list}).}
 
+\item{nm_scheme}{The naming scheme for the columns of the output matrix.
+Either \code{"auto"}, \code{"rstanarm"}, or \code{"brms"}, where \code{"auto"} chooses
+\code{"rstanarm"} or \code{"brms"} based on the class of the reference model fit (and
+uses \code{"rstanarm"} if the reference model fit is of an unknown class).}
+
 \item{...}{Currently ignored.}
 }
 \value{
-An \eqn{S_{\mbox{prj}} \times Q}{S_prj x Q} matrix of projected
-draws, with \eqn{S_{\mbox{prj}}}{S_prj} denoting the number of projected
+An \eqn{S_{\mathrm{prj}} \times Q}{S_prj x Q} matrix of projected
+draws, with \eqn{S_{\mathrm{prj}}}{S_prj} denoting the number of projected
 draws and \eqn{Q} the number of parameters.
 }
 \description{

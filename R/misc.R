@@ -4,6 +4,10 @@
   packageStartupMessage(msg)
 }
 
+nms_d_test <- function() {
+  c("type", "data", "offset", "weights", "y")
+}
+
 weighted.sd <- function(x, w, na.rm = FALSE) {
   if (na.rm) {
     ind <- !is.na(w) & !is.na(x)
@@ -29,15 +33,16 @@ log_sum_exp <- function(x) {
 auc <- function(x) {
   resp <- x[, 1]
   pred <- x[, 2]
-  weights <- x[, 3]
+  wcv <- x[, 3]
   n <- nrow(x)
   ord <- order(pred, decreasing = TRUE)
   resp <- resp[ord]
   pred <- pred[ord]
-  weights <- weights[ord]
-  w0 <- w1 <- weights
-  w0[resp == 1] <- 0 # true negative weights
-  w1[resp == 0] <- 0 # true positive weights
+  wcv <- wcv[ord]
+  w0 <- w1 <- wcv
+  stopifnot(all(resp %in% c(0, 1)))
+  w0[resp == 1] <- 0 # for calculating the false positive rate (fpr)
+  w1[resp == 0] <- 0 # for calculating the true positive rate (tpr)
   cum_w0 <- cumsum(w0)
   cum_w1 <- cumsum(w1)
 
@@ -56,18 +61,19 @@ auc <- function(x) {
 # Bootstrap an arbitrary quantity `fun` that takes the sample `x` as the first
 # input. Other arguments of `fun` can be passed by `...`. Example:
 # `boostrap(x, mean)`.
-bootstrap <- function(x, fun = mean, b = 2000, seed = NULL, ...) {
-  # set random seed but ensure the old RNG state is restored on exit
-  if (exists(".Random.seed")) {
-    rng_state_old <- .Random.seed
+bootstrap <- function(x, fun = mean, B = 2000,
+                      seed = sample.int(.Machine$integer.max, 1), ...) {
+  # Set seed, but ensure the old RNG state is restored on exit:
+  if (exists(".Random.seed", envir = .GlobalEnv)) {
+    rng_state_old <- get(".Random.seed", envir = .GlobalEnv)
     on.exit(assign(".Random.seed", rng_state_old, envir = .GlobalEnv))
   }
-  set.seed(seed)
+  if (!is.na(seed)) set.seed(seed)
 
   seq_x <- seq_len(NROW(x))
   is_vector <- NCOL(x) == 1
-  bsstat <- rep(NA, b)
-  for (i in 1:b) {
+  bsstat <- rep(NA, B)
+  for (i in 1:B) {
     bsind <- sample(seq_x, replace = TRUE)
     bsstat[i] <- fun(if (is_vector) x[bsind] else x[bsind, ], ...)
   }
@@ -175,96 +181,99 @@ bootstrap <- function(x, fun = mean, b = 2000, seed = NULL, ...) {
 #   `!is.null(nclusters)`, then clustering is used and `ndraws` is ignored.
 # @param ndraws The desired number of draws. If `!is.null(nclusters)`, then
 #   clustering is used and `ndraws` is ignored.
-# @param seed The seed for (P)RNG (see `?set.seed`, for example).
 # @param thinning A single logical value indicating whether in the case where
 #   `ndraws` is used, the reference model's draws should be thinned or
 #   subsampled (without replacement).
 #
 # @return Let \eqn{y} denote the response (vector), \eqn{N} the number of
-#   observations, and \eqn{S_{\mbox{prj}}}{S_prj} the number of projected draws
-#   (= either `nclusters` or `ndraws`, depending on which one is used). Then the
-#   return value is a list with elements:
+#   observations, and \eqn{S_{\mathrm{prj}}}{S_prj} the number of projected
+#   draws (= either `nclusters` or `ndraws`, depending on which one is used).
+#   Then the return value is a list with elements:
 #
-#   * `mu`: An \eqn{N \times S_{\mbox{prj}}}{N x S_prj} matrix of expected
+#   * `mu`: An \eqn{N \times S_{\mathrm{prj}}}{N x S_prj} matrix of expected
 #   values for \eqn{y} for each draw/cluster.
-#   * `var`: An \eqn{N \times S_{\mbox{prj}}}{N x S_prj} matrix of predictive
+#   * `var`: An \eqn{N \times S_{\mathrm{prj}}}{N x S_prj} matrix of predictive
 #   variances for \eqn{y} for each draw/cluster which are needed for projecting
 #   the dispersion parameter (the predictive variances are NA for those families
 #   that do not have a dispersion parameter).
-#   * `dis`: A vector of length \eqn{S_{\mbox{prj}}}{S_prj} containing the
+#   * `dis`: A vector of length \eqn{S_{\mathrm{prj}}}{S_prj} containing the
 #   reference model's dispersion parameter value for each draw/cluster (NA for
-#   those families that do not have a dispersion parameter). See issue #204.
-#   * `weights`: A vector of length \eqn{S_{\mbox{prj}}}{S_prj} containing the
+#   those families that do not have a dispersion parameter).
+#   * `weights`: A vector of length \eqn{S_{\mathrm{prj}}}{S_prj} containing the
 #   weights for the draws/clusters.
 #   * `cl`: Cluster assignment for each posterior draw, that is, a vector that
 #   has length equal to the number of posterior draws and each value is an
-#   integer between 1 and \eqn{S_{\mbox{prj}}}{S_prj}.
-.get_refdist <- function(refmodel, ndraws = NULL, nclusters = NULL, seed = NULL,
-                         thinning = TRUE) {
-  # set random seed but ensure the old RNG state is restored on exit
-  if (exists(".Random.seed")) {
-    rng_state_old <- .Random.seed
-    on.exit(assign(".Random.seed", rng_state_old, envir = .GlobalEnv))
-  }
-  set.seed(seed)
-
-  S <- NCOL(refmodel$mu) # number of draws in the reference model
-  if (is.null(ndraws)) {
-    ndraws <- S
-  }
+#   integer between 1 and \eqn{S_{\mathrm{prj}}}{S_prj}.
+.get_refdist <- function(refmodel, ndraws = NULL, nclusters = NULL,
+                         thinning = TRUE,
+                         throw_mssg_ndraws = getOption("projpred.mssg_ndraws",
+                                                       TRUE)) {
+  # Number of draws in the reference model:
+  S <- NCOL(refmodel$mu)
 
   if (!is.null(nclusters)) {
     # use clustering (ignore ndraws argument)
-    if (nclusters == 1) {
-      # special case, only one cluster
-      cl <- rep(1, S)
-      p_ref <- .get_p_clust(refmodel$family, refmodel$mu, refmodel$dis,
-                            wobs = refmodel$wobs, cl = cl)
-    } else if (nclusters == NCOL(refmodel$mu)) {
+    nclusters <- min(S, nclusters)
+    if (nclusters == S) {
       # number of clusters equal to the number of samples, so return the samples
-      return(.get_refdist(refmodel, ndraws = nclusters, seed = seed))
+      return(.get_refdist(refmodel, ndraws = nclusters,
+                          throw_mssg_ndraws = FALSE))
+    } else if (nclusters == 1) {
+      # special case, only one cluster
+      p_ref <- .get_p_clust(family = refmodel$family, mu = refmodel$mu,
+                            eta = refmodel$eta, dis = refmodel$dis,
+                            wobs = refmodel$wobs, cl = rep(1, S),
+                            offs = refmodel$offset)
     } else {
       # several clusters
-      if (nclusters > NCOL(refmodel$mu)) {
-        stop("The number of clusters nclusters cannot exceed the number of ",
-             "columns in mu.")
-      }
-      p_ref <- .get_p_clust(refmodel$family, refmodel$mu, refmodel$dis,
-                            wobs = refmodel$wobs, nclusters = nclusters)
+      p_ref <- .get_p_clust(family = refmodel$family, mu = refmodel$mu,
+                            eta = refmodel$eta, dis = refmodel$dis,
+                            wobs = refmodel$wobs, nclusters = nclusters,
+                            offs = refmodel$offset)
     }
   } else {
-    if (ndraws > NCOL(refmodel$mu)) {
-      stop("The number of draws ndraws cannot exceed the number of ",
-           "columns in mu.")
+    ndraws <- min(S, ndraws)
+    if (ndraws <= 20 && isTRUE(throw_mssg_ndraws)) {
+      message("The number of draws to project is quite small (<= 20). In such ",
+              "cases, it is usually better to use clustering.")
     }
     if (thinning) {
       s_ind <- round(seq(from = 1, to = S, length.out = ndraws))
     } else {
-      s_ind <- sample(seq_len(S), size = ndraws)
+      s_ind <- draws_subsample(S = S, ndraws = ndraws)
     }
     cl <- rep(NA, S)
-    cl[s_ind] <- c(1:ndraws)
+    cl[s_ind] <- 1:ndraws
+    mu_offs <- refmodel$mu
+    if (!all(refmodel$offset == 0)) {
+      mu_offs <- refmodel$family$linkinv(
+        refmodel$family$linkfun(mu_offs) + refmodel$offset
+      )
+    }
     predvar <- do.call(cbind, lapply(s_ind, function(j) {
-      refmodel$family$predvar(refmodel$mu[, j, drop = FALSE], refmodel$dis[j])
+      refmodel$family$predvar(mu_offs[, j, drop = FALSE], refmodel$dis[j])
     }))
     p_ref <- list(
       mu = refmodel$mu[, s_ind, drop = FALSE], var = predvar,
-      dis = refmodel$dis[s_ind], weights = rep(1 / ndraws, ndraws), cl = cl
+      dis = refmodel$dis[s_ind], weights = rep(1 / ndraws, ndraws), cl = cl,
+      clust_used = FALSE
     )
   }
 
   return(p_ref)
 }
 
-.get_p_clust <- function(family, mu, dis, nclusters = 10,
+# Function for clustering the parameter draws:
+.get_p_clust <- function(family, mu, eta, dis, nclusters = 10,
                          wobs = rep(1, dim(mu)[1]),
-                         wsample = rep(1, dim(mu)[2]), cl = NULL) {
-  # Function for perfoming the clustering over the samples.
-  #
+                         wsample = rep(1, dim(mu)[2]), cl = NULL,
+                         offs = rep(0, dim(mu)[1])) {
   # cluster the samples in the latent space if no clustering provided
   if (is.null(cl)) {
-    f <- family$linkfun(mu)
-    out <- kmeans(t(f), nclusters, iter.max = 50)
+    # Note: A seed is not set here because this function is not exported and has
+    # a calling stack at the beginning of which a seed is set.
+
+    out <- kmeans(t(eta), nclusters, iter.max = 50)
     cl <- out$cluster # cluster indices for each sample
   } else if (typeof(cl) == "list") {
     # old clustering solution provided, so fetch the cluster indices
@@ -277,40 +286,56 @@ bootstrap <- function(x, fun = mean, b = 2000, seed = NULL, ...) {
 
   # (re)compute the cluster centers, because they may be different from the ones
   # returned by kmeans if the samples have differing weights
-  # number of clusters (assumes labeling 1,...,nclusters)
+  # Number of clusters (assumes labeling "1, ..., nclusters"):
   nclusters <- max(cl, na.rm = TRUE)
+  # Cluster centers:
   centers <- matrix(0, nrow = nclusters, ncol = dim(mu)[1])
-  wcluster <- rep(0, nclusters) # cluster weights
+  # Cluster weights:
+  wcluster <- rep(0, nclusters)
+  # Dispersion parameter draws aggregated within each cluster:
+  dis_agg <- rep(NA_real_, nclusters)
+  # Predictive variances:
+  predvar <- matrix(nrow = dim(mu)[1], ncol = nclusters)
   eps <- 1e-10
+  # Predictions incorporating offsets (needed for `predvar`):
+  mu_offs <- mu
+  if (!all(offs == 0)) {
+    mu_offs <- family$linkinv(family$linkfun(mu_offs) + offs)
+  }
   for (j in 1:nclusters) {
-    # compute normalized weights within the cluster, 1-eps is for numerical
-    # stability
     ind <- which(cl == j)
+    # Compute normalized weights within the j-th cluster; `1 - eps` is for
+    # numerical stability:
     ws <- wsample[ind] / sum(wsample[ind]) * (1 - eps)
 
-    # cluster centers and their weights
+    # Center of the j-th cluster:
     centers[j, ] <- mu[, ind, drop = FALSE] %*% ws
-    wcluster[j] <- sum(wsample[ind]) # unnormalized weight for the jth cluster
+    # Unnormalized weight for the j-th cluster:
+    wcluster[j] <- sum(wsample[ind])
+    # Aggregated dispersion parameter for the j-th cluster:
+    dis_agg[j] <- crossprod(dis[ind], ws)
+    # Predictive variance for the j-th cluster:
+    predvar[, j] <- family$predvar(mu_offs[, ind, drop = FALSE], dis[ind], ws)
   }
   wcluster <- wcluster / sum(wcluster)
-
-  # predictive variances
-  predvar <- do.call(cbind, lapply(1:nclusters, function(j) {
-    # compute normalized weights within the cluster, 1-eps is for numerical
-    # stability
-    ind <- which(cl == j)
-    ws <- wsample[ind] / sum(wsample[ind]) * (1 - eps)
-    family$predvar(mu[, ind, drop = FALSE], dis[ind], ws)
-  }))
 
   # combine the results
   p <- list(
     mu = unname(t(centers)),
     var = predvar,
+    dis = dis_agg,
     weights = wcluster,
-    cl = cl
+    cl = cl,
+    clust_used = TRUE
   )
   return(p)
+}
+
+draws_subsample <- function(S, ndraws) {
+  # Note: A seed is not set here because this function is not exported and has a
+  # calling stack at the beginning of which a seed is set.
+
+  return(sample.int(S, size = ndraws))
 }
 
 .is_proj_list <- function(proj) {
@@ -430,17 +455,17 @@ deparse_combine <- function(x, max_char = NULL) {
 #' @export
 magrittr::`%>%`
 
+# `R CMD check` throws a note when using <package>:::<function>() (for accessing
+# <function> which is not exported by its <package>). Of course, usage of
+# non-exported functions should be avoided, but sometimes there's no way around
+# that. Thus, with the following helper operator, it is possible to redefine
+# such functions here in projpred:
 `%:::%` <- function(pkg, fun) {
   # Note: `utils::getFromNamespace(fun, pkg)` could probably be used, too (but
   # its documentation is unclear about the inheritance from parent
   # environments).
   get(fun, envir = asNamespace(pkg), inherits = FALSE)
 }
-
-# Function where() is not exported by package tidyselect, so redefine it here to
-# avoid a note in R CMD check which would occur for usage of
-# tidyselect:::where():
-where <- "tidyselect" %:::% "where"
 
 # Helper function to combine separate `list`s into a single `list`:
 rbind2list <- function(x) {

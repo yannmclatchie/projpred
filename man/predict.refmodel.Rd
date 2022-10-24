@@ -21,7 +21,8 @@
 \item{newdata}{Passed to argument \code{newdata} of the reference model's
 \code{extract_model_data} function (see \code{\link[=init_refmodel]{init_refmodel()}}). Provides the
 predictor (and possibly also the response) data for the new (or old)
-observations.}
+observations. May also be \code{NULL} (see argument \code{extract_model_data} of
+\code{\link[=init_refmodel]{init_refmodel()}}). If not \code{NULL}, any \code{NA}s will trigger an error.}
 
 \item{ynew}{If not \code{NULL}, then this needs to be a vector of new (or old)
 response values. See section "Value" below.}
@@ -52,7 +53,7 @@ This is the \code{\link[=predict]{predict()}} method for \code{refmodel} objects
 \code{\link[=get_refmodel]{get_refmodel()}} or \code{\link[=init_refmodel]{init_refmodel()}}). It offers three types of output which
 are all based on the reference model and new (or old) observations: Either
 the linear predictor on link scale, the linear predictor transformed to
-response scale, or the log-predictive density.
+response scale, or the log predictive density.
 }
 \details{
 Argument \code{weightsnew} is only relevant if \code{!is.null(ynew)}.

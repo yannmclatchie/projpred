@@ -12,11 +12,18 @@ extract_terms_response <- function(formula) {
   allterms_ <- as.list(attr(tt, "variables")[-1])
   response <- attr(tt, "response")
   global_intercept <- attr(tt, "intercept") == 1
+  offs_attr <- attr(tt, "offset")
 
   if (response) {
     response <- allterms_[response]
   } else {
     response <- NA
+  }
+
+  if (length(offs_attr)) {
+    offset_terms <- sapply(allterms_[offs_attr], deparse)
+  } else {
+    offset_terms <- NULL
   }
 
   hier <- grepl("\\|", terms_)
@@ -34,7 +41,8 @@ extract_terms_response <- function(formula) {
     additive_terms,
     group_terms,
     response,
-    global_intercept
+    global_intercept,
+    offset_terms
   ))
 }
 
@@ -72,7 +80,7 @@ remove_duplicates <- function(formula) {
 ## @return the response as a character vector.
 extract_response <- function(response) {
   if (length(response) > 1) {
-    stop("Response must have a single element.")
+    stop("Object `response` must not have length greater than 1.")
   }
   response_name_ch <- as.character(response[[1]])
   if ("cbind" %in% response_name_ch) {
@@ -527,46 +535,6 @@ subset_formula_and_data <- function(formula, terms_, data, y = NULL,
   return(nlist(formula, data))
 }
 
-# ## Utility to just replace the response in the data frame
-# ## @param formula A formula for a valid model.
-# ## @param terms_ A vector of terms to subset.
-# ## @param split_formula If TRUE breaks the response down into single response
-# ##   formulas.
-# ## Default FALSE. It only works if `y` represents a multi-output response.
-# ## @return a function that replaces the response in the data with arguments
-# ## @param y The response vector. Default NULL.
-# ## @param data The original data frame for the full formula.
-# get_replace_response <- function(formula, terms_, split_formula = FALSE) {
-#   formula <- make_formula(terms_, formula = formula)
-#   tt <- extract_terms_response(formula)
-#   response_name <- tt$response
-#
-#   response_cols <- paste0(".", response_name)
-#   replace_response <- function(y, data) {
-#     response_ncol <- ncol(y) %||% 1
-#     if (!is.null(ncol(y)) && ncol(y) > 1) {
-#       response_cols <- paste0(response_cols, ".", seq_len(ncol(y)))
-#       if (!split_formula) {
-#         response_vector <- paste0(
-#           "cbind(",
-#           paste(response_cols, collapse = ", "),
-#           ")"
-#         )
-#       }
-#     }
-#
-#     ## don't overwrite original y name
-#     if (all(response_cols %in% colnames(data))) {
-#       data[, response_cols] <- y
-#     } else {
-#       data <- data.frame(.z = y, data)
-#       colnames(data)[seq_len(response_ncol)] <- response_cols
-#     }
-#     return(data)
-#   }
-#   return(replace_response)
-# }
-
 ## Subsets a formula by the given terms.
 ## @param terms_ A vector of terms to subset from the right hand side.
 ## @return A formula object with the collapsed terms.
@@ -648,8 +616,6 @@ select_possible_terms_size <- function(chosen, terms, size) {
   }
 
   valid_submodels <- lapply(terms, function(x) {
-    current <- count_terms_chosen(chosen)
-    increment <- size - current
     ## if we are adding a linear term whose smooth is already
     ## included, we reject it
     terms <- extract_terms_response(make_formula(c(chosen)))
@@ -663,15 +629,9 @@ select_possible_terms_size <- function(chosen, terms, size) {
     linear <- terms_new$individual_terms
     dups <- setdiff(linear[!is.na(match(linear, additive))], chosen)
 
-    ## if model is straight redundant
-    not_redundant <- (
-      count_terms_chosen(c(chosen, x), duplicates = TRUE) -
-        current -
-        length(dups)
-    ) == increment
-    ## if already_chosen is not NA it means we have already chosen the linear
-    ## term
-    if (not_redundant) {
+    size_crr <- count_terms_chosen(c(chosen, x), duplicates = TRUE) -
+      length(dups)
+    if (size_crr == size) {
       if (length(dups) > 0) {
         tt <- terms(formula(paste("~", x, "-", paste(dups, collapse = "-"))))
         x <- setdiff(attr(tt, "term.labels"), chosen)
@@ -679,15 +639,16 @@ select_possible_terms_size <- function(chosen, terms, size) {
           x <- paste0("(", x, ")")
         }
       }
-      x
+      return(x)
     } else {
-      NA
+      return(NA)
     }
   })
   valid_submodels <- unlist(valid_submodels[!is.na(valid_submodels)])
   if (length(chosen) > 0) {
     add_chosen <- paste0(" + ", paste(chosen, collapse = "+"))
-    remove_chosen <- paste0(" - ", paste(chosen, collapse = "-"))
+    remove_chosen <- paste0(" - ",
+                            paste(gsub("\\+", "-", chosen), collapse = "-"))
   } else {
     add_chosen <- ""
     remove_chosen <- ""
@@ -731,45 +692,39 @@ count_terms_chosen <- function(list_of_terms, duplicates = TRUE,
   )
 }
 
-## Utility that checks if the next submodel is redundant with the current one.
-## @param formula The reference models' formula.
-## @param current A list of terms included in the current submodel.
-## @param new The new term to add to the submodel.
-## @return TRUE if the new term results in a redundant model, FALSE otherwise.
-is_next_submodel_redundant <- function(current, new) {
-  old_submodel <- current
-  new_submodel <- c(current, new)
-  if (count_terms_chosen(new_submodel) >
-      count_terms_chosen(old_submodel)) {
-    return(FALSE)
-  } else {
-    return(TRUE)
-  }
-}
-
-## Utility to remove redundant models to consider
-## @param refmodel The reference model's formula.
-## @param chosen A list of included terms at a given point of the search.
-## @return a vector of incremental non redundant submodels for all the possible
-##   terms included.
-reduce_models <- function(chosen) {
-  Reduce(
-    function(chosen, x) {
-      if (is_next_submodel_redundant(chosen, x)) {
-        chosen
-      } else {
-        c(chosen, x)
-      }
-    },
-    chosen
-  )
-}
-
 ## Helper function to evaluate right hand side formulas in a context
+## Caution: This does not evaluate the right-hand side of a *full formula* such
+## as `y ~ x`, but the right-hand side of a *right-hand side formula* such as
+## `~ x`.
 ## @param formula Formula to evaluate.
 ## @param data Data with which to evaluate.
 ## @return output from the evaluation
 eval_rhs <- function(formula, data) {
+  stopifnot(length(formula) == 2)
+  eval_el2(formula = formula, data = data)
+}
+
+# Helper function to evaluate the left-hand side of a `formula` in a specific
+# environment `data`. This refers to full formulas such as `y ~ 1` or `y ~ x`
+# (in R, there is no such thing like a "left-hand side formula").
+#
+# @param formula A `formula` whose left-hand side should be evaluated.
+# @param data Passed to argument `envir` of eval().
+#
+# @return The output from eval().
+eval_lhs <- function(formula, data) {
+  stopifnot(length(formula) == 3)
+  eval_el2(formula = formula, data = data)
+}
+
+# Helper function to evaluate the second element of a `formula` in a specific
+# environment `data`.
+#
+# @param formula A `formula` whose second element should be evaluated.
+# @param data Passed to argument `envir` of eval().
+#
+# @return The output from eval().
+eval_el2 <- function(formula, data) {
   eval(formula[[2]], data, environment(formula))
 }
 
@@ -782,78 +737,11 @@ lhs <- function(x) {
   if (length(x) == 3L) update(x, . ~ 1) else NULL
 }
 
-# # taken from brms
-# ## validate formulas dedicated to response variables
-# ## @param x coerced to a formula object
-# ## @param empty_ok is an empty left-hand-side ok?
-# ## @return a formula of the form <response> ~ 1
-# validate_resp_formula <- function(x, empty_ok = TRUE) {
-#   out <- lhs(as.formula(x))
-#   if (is.null(out)) {
-#     if (empty_ok) {
-#       out <- ~ 1
-#     } else {
-#       str_x <- formula2str(x, space = "trim")
-#       stop2("Response variable is missing in formula ", str_x)
-#     }
-#   }
-#   out <- gsub("\\|+[^~]*~", "~", formula2str(out))
-#   out <- try(formula(out), silent = TRUE)
-#   if (is(out, "try-error")) {
-#     str_x <- formula2str(x, space = "trim")
-#     stop2("Incorrect use of '|' on the left-hand side of ", str_x)
-#   }
-#   environment(out) <- environment(x)
-#   out
-# }
-
-# # taken from brms
-# ## convert a formula to a character string
-# ## @param formula a model formula
-# ## @param rm a vector of to elements indicating how many characters
-# ##   should be removed at the beginning and end of the string respectively
-# ## @param space how should whitespaces be treated?
-# ## @return a single character string or NULL
-# formula2str <- function(formula, rm = c(0, 0), space = c("rm", "trim")) {
-#   if (is.null(formula)) {
-#     return(NULL)
-#   }
-#   formula <- as.formula(formula)
-#   space <- match.arg(space)
-#   if (anyNA(rm[2])) rm[2] <- 0
-#   x <- Reduce(paste, deparse(formula))
-#   x <- gsub("[\t\r\n]+", "", x, perl = TRUE)
-#   if (space == "trim") {
-#     x <- gsub(" {1,}", " ", x, perl = TRUE)
-#   } else {
-#     x <- gsub(" ", "", x, perl = TRUE)
-#   }
-#   substr(x, 1 + rm[1], nchar(x) - rm[2])
-# }
-
 ## remove intercept from formula
 ## @param formula a model formula
 ## @return the updated formula without intercept
 delete.intercept <- function(formula) {
   return(update(formula, . ~ . - 1))
-}
-
-## construct contrasts.arg list argument for model.matrix based on the current
-## model's formula.
-## @param formula a formula object
-## @param data model's data
-## @return a named list with each factor and its contrasts
-get_contrasts_arg_list <- function(formula, data) {
-  ## extract model frame
-  ## check categorical variables
-  ## add contrasts for those
-  frame <- model.frame(delete.response(terms(formula)), data = data)
-  factors <- sapply(frame, is.factor)
-  contrasts_arg <- lapply(names(factors)[as.logical(factors)], function(v) {
-    stats::contrasts(frame[, v], contrasts = FALSE)
-  })
-  contrasts_arg <- setNames(contrasts_arg, names(factors)[as.logical(factors)])
-  return(contrasts_arg)
 }
 
 ## collapse a list of terms including contrasts
@@ -865,12 +753,16 @@ collapse_contrasts_solution_path <- function(formula, path, data) {
   tt <- terms(formula)
   terms_ <- attr(tt, "term.labels")
   for (term in terms_) {
-    current_form <- as.formula(paste("~ 0 +", term))
-    contrasts_arg <- get_contrasts_arg_list(current_form, data)
-    if (length(contrasts_arg) == 0) {
+    # TODO: In the following model.matrix() call, allow user-specified contrasts
+    # to be passed to argument `contrasts.arg`. The `contrasts.arg` default
+    # (`NULL`) uses `options("contrasts")` internally, but it might be more
+    # convenient to let users specify contrasts directly. At that occasion,
+    # contrasts should also be tested thoroughly (not done until now).
+    x <- model.matrix(as.formula(paste("~ 1 +", term)), data = data)
+    if (length(attr(x, "contrasts")) == 0) {
       next
     }
-    x <- model.matrix(current_form, data, contrasts.arg = contrasts_arg)
+    x <- x[, colnames(x) != "(Intercept)", drop = FALSE]
     path <- Reduce(
       function(current, pattern) {
         pattern <- gsub("\\+", "\\\\+", pattern)
@@ -898,7 +790,8 @@ split_formula_random_gamm4 <- function(formula) {
     paste(parens_group_terms, collapse = " + ")
   ))
   formula <- update(formula, make_formula(c(
-    tt$individual_terms, tt$interaction_terms, tt$additive_terms
+    tt$individual_terms, tt$interaction_terms, tt$additive_terms,
+    tt$offset_terms
   )))
   return(nlist(formula, random))
 }
@@ -922,5 +815,7 @@ formula.gamm4 <- function(x) {
       paste(split_formula(updated), collapse = " + ")
     )
   ))
+  # TODO (GAMMs): Once rstanarm issue #253 has been resolved, we probably need
+  # to include offset terms here (in the output of formula.gamm4()) as well.
   return(form)
 }

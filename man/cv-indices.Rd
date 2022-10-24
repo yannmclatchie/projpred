@@ -6,9 +6,14 @@
 \alias{cv_ids}
 \title{Create cross-validation folds}
 \usage{
-cvfolds(n, K, seed = NULL)
+cvfolds(n, K, seed = sample.int(.Machine$integer.max, 1))
 
-cv_ids(n, K, out = c("foldwise", "indices"), seed = NULL)
+cv_ids(
+  n,
+  K,
+  out = c("foldwise", "indices"),
+  seed = sample.int(.Machine$integer.max, 1)
+)
 }
 \arguments{
 \item{n}{Number of observations.}
@@ -16,21 +21,21 @@ cv_ids(n, K, out = c("foldwise", "indices"), seed = NULL)
 \item{K}{Number of folds. Must be at least 2 and not exceed \code{n}.}
 
 \item{seed}{Pseudorandom number generation (PRNG) seed by which the same
-results can be obtained again if needed. If \code{NULL}, no seed is set and
-therefore, the results are not reproducible. See \code{\link[=set.seed]{set.seed()}} for details.}
+results can be obtained again if needed. Passed to argument \code{seed} of
+\code{\link[=set.seed]{set.seed()}}, but can also be \code{NA} to not call \code{\link[=set.seed]{set.seed()}} at all.}
 
 \item{out}{Format of the output, either \code{"foldwise"} or \code{"indices"}. See
 below for details.}
 }
 \value{
 \code{\link[=cvfolds]{cvfolds()}} returns a vector of length \code{n} such that each element is
-an integer between 1 and \code{k} denoting which fold the corresponding data
+an integer between 1 and \code{K} denoting which fold the corresponding data
 point belongs to. The return value of \code{\link[=cv_ids]{cv_ids()}} depends on the \code{out}
-argument. If \code{out = "foldwise"}, the return value is a \code{list} with \code{k}
+argument. If \code{out = "foldwise"}, the return value is a \code{list} with \code{K}
 elements, each being a \code{list} with elements \code{tr} and \code{ts} giving the
 training and test indices, respectively, for the corresponding fold. If
 \code{out = "indices"}, the return value is a \code{list} with elements \code{tr} and \code{ts}
-each being a \code{list} with \code{k} elements giving the training and test indices,
+each being a \code{list} with \code{K} elements giving the training and test indices,
 respectively, for each fold.
 }
 \description{

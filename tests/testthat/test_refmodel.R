@@ -43,8 +43,7 @@ test_that("missing `data` fails", {
   ))
   expect_error(
     get_refmodel(fit_nodata),
-    paste("^`object\\$data` must be a `data\\.frame` or a `matrix` \\(but a",
-          "`data\\.frame` is recommended\\)\\.$")
+    paste("^is\\.data\\.frame\\(data\\) is not TRUE$")
   )
 })
 
@@ -62,24 +61,44 @@ test_that("`formula` as a character string fails", {
                "^inherits\\(formula, \"formula\"\\) is not TRUE$")
 })
 
-test_that("offsets specified via argument `offset` fail", {
-  fit_offs_arg <- suppressWarnings(rstanarm::stan_glm(
-    y_glm_gauss ~ xco.1 + xco.2 + xco.3 + xca.1 + xca.2,
-    family = f_gauss, data = dat,
-    weights = wobs_tst, offset = offs_tst,
-    chains = chains_tst, seed = seed_fit, iter = iter_tst, QR = TRUE,
-    refresh = 0
+test_that("offsets specified via argument `offset` work", {
+  args_fit_i <- args_fit$rstanarm.glm.gauss.stdformul.with_wobs.with_offs
+  skip_if_not(!is.null(args_fit_i))
+  fit_fun_nm <- switch(args_fit_i$pkg_nm,
+                       "rstanarm" = switch(args_fit_i$mod_nm,
+                                           "glm" = "stan_glm",
+                                           "glmm" = "stan_glmer",
+                                           "stan_gamm4"),
+                       "brms" = "brm",
+                       stop("Unknown `pkg_nm`."))
+  upd_no_offs <- paste(". ~", sub(" \\+ offset\\(offs_col\\)", "",
+                                  as.character(args_fit_i$formula[3])))
+  fit_offs_arg <- suppressWarnings(do.call(
+    get(fit_fun_nm, asNamespace(args_fit_i$pkg_nm)),
+    c(list(formula = update(args_fit_i$formula, upd_no_offs),
+           offset = offs_tst),
+      excl_nonargs(args_fit_i, nms_excl_add = "formula"))
   ))
-  expect_error(
-    get_refmodel(fit_offs_arg),
-    paste("^It looks like `object` was fitted with offsets specified via",
-          "argument `offset`\\.")
+  refmod_offs_arg <- get_refmodel(fit_offs_arg)
+  expect_equal(
+    as.matrix(fit_offs_arg),
+    as.matrix(fits$rstanarm.glm.gauss.stdformul.with_wobs.with_offs),
+    tolerance = 1e-12,
+    info = "rstanarm.glm.gauss.stdformul.with_wobs.with_offs"
+  )
+  nms_compare <- c("mu", "eta", "dis", "y", "intercept", "wobs", "wsample",
+                   "offset")
+  expect_equal(
+    refmod_offs_arg[nms_compare],
+    refmods$rstanarm.glm.gauss.stdformul.with_wobs.with_offs[nms_compare],
+    tolerance = 1e-12,
+    info = "rstanarm.glm.gauss.stdformul.with_wobs.with_offs"
   )
 })
 
 test_that(paste(
   "binomial family with 1-column response and weights which are not all ones",
-  "warns"
+  "errors"
 ), {
   dat_prop <- within(dat, {
     ybinprop_glm <- y_glm_binom / wobs_col
@@ -91,14 +110,14 @@ test_that(paste(
     chains = chains_tst, seed = seed_fit, iter = iter_tst, QR = TRUE,
     refresh = 0
   ))
-  expect_equal(
-    as.matrix(fit_binom_1col_wobs),
-    as.matrix(fits$rstanarm.glm.binom.stdformul.without_wobs.with_offs)
-  )
-  expect_error(
-    get_refmodel(fit_binom_1col_wobs),
-    paste("response must contain numbers of successes")
-  )
+  if ("rstanarm.glm.binom.stdformul.without_wobs.with_offs" %in% names(fits)) {
+    expect_equal(
+      as.matrix(fit_binom_1col_wobs),
+      as.matrix(fits$rstanarm.glm.binom.stdformul.without_wobs.with_offs)
+    )
+  }
+  expect_error(get_refmodel(fit_binom_1col_wobs),
+               "response must contain numbers of successes")
 })
 
 test_that("get_refmodel() is idempotent", {
@@ -131,44 +150,17 @@ test_that(paste(
     mod_crr <- args_ref[[tstsetup]]$mod_nm
     fam_crr <- args_ref[[tstsetup]]$fam_nm
 
-    # We expect a warning which in fact should be suppressed, though (see
-    # issue #162):
-    warn_expected <- if (pkg_crr == "rstanarm" &&
-                         mod_crr == "glm" &&
-                         grepl("\\.with_offs", tstsetup)) {
-      paste("^'offset' argument is NULL but it looks like you",
-            "estimated the model using an offset term\\.$")
-    } else {
-      NA
-    }
-
     y_crr <- dat[, paste("y", mod_crr, fam_crr, sep = "_")]
 
     # Without `ynew`:
-    expect_warning(
-      predref_resp <- predict(refmods[[tstsetup]], dat, type = "response"),
-      warn_expected,
-      info = tstsetup
-    )
-    expect_warning(
-      predref_link <- predict(refmods[[tstsetup]], dat, type = "link"),
-      warn_expected,
-      info = tstsetup
-    )
+    predref_resp <- predict(refmods[[tstsetup]], dat, type = "response")
+    predref_link <- predict(refmods[[tstsetup]], dat, type = "link")
 
     # With `ynew`:
-    expect_warning(
-      predref_ynew_resp <- predict(refmods[[tstsetup]], dat, ynew = y_crr,
-                                   type = "response"),
-      warn_expected,
-      info = tstsetup
-    )
-    expect_warning(
-      predref_ynew_link <- predict(refmods[[tstsetup]], dat, ynew = y_crr,
-                                   type = "link"),
-      warn_expected,
-      info = tstsetup
-    )
+    predref_ynew_resp <- predict(refmods[[tstsetup]], dat, ynew = y_crr,
+                                 type = "response")
+    predref_ynew_link <- predict(refmods[[tstsetup]], dat, ynew = y_crr,
+                                 type = "link")
 
     # Checks without `ynew`:
     expect_true(is.vector(predref_resp, "double"), info = tstsetup)
@@ -191,5 +183,20 @@ test_that(paste(
                  info = tstsetup)
     expect_false(isTRUE(all.equal(predref_ynew_resp, predref_link)),
                  info = tstsetup)
+
+    # Snapshots:
+    if (run_snaps) {
+      if (testthat_ed_max2) local_edition(3)
+      width_orig <- options(width = 145)
+      expect_snapshot({
+        print(tstsetup)
+        print(rlang::hash(predref_resp))
+        print(rlang::hash(predref_link))
+        print(rlang::hash(predref_ynew_resp))
+        print(rlang::hash(predref_ynew_link))
+      })
+      options(width_orig)
+      if (testthat_ed_max2) local_edition(2)
+    }
   }
 })

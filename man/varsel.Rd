@@ -4,7 +4,7 @@
 \alias{varsel}
 \alias{varsel.default}
 \alias{varsel.refmodel}
-\title{Variable selection (without cross-validation)}
+\title{Variable selection without cross-validation}
 \usage{
 varsel(object, ...)
 
@@ -14,8 +14,8 @@ varsel(object, ...)
   object,
   d_test = NULL,
   method = NULL,
-  ndraws = 20,
-  nclusters = NULL,
+  ndraws = NULL,
+  nclusters = 20,
   ndraws_pred = 400,
   nclusters_pred = NULL,
   refit_prj = !inherits(object, "datafit"),
@@ -27,7 +27,7 @@ varsel(object, ...)
   regul = 1e-04,
   penalty = NULL,
   search_terms = NULL,
-  seed = NULL,
+  seed = sample.int(.Machine$integer.max, 1),
   ...
 )
 }
@@ -36,22 +36,25 @@ varsel(object, ...)
 \code{\link[=init_refmodel]{init_refmodel()}}) or an object that can be passed to argument \code{object} of
 \code{\link[=get_refmodel]{get_refmodel()}}.}
 
-\item{...}{Arguments passed to \code{\link[=get_refmodel]{get_refmodel()}}.}
+\item{...}{Arguments passed to \code{\link[=get_refmodel]{get_refmodel()}} as well as to the divergence
+minimizer (during a forward search and also during the evaluation part, but
+the latter only if \code{refit_prj} is \code{TRUE}).}
 
-\item{d_test}{For internal use only. A \code{list} providing information about the
-test set which is used for evaluating the predictive performance of the
-reference model. If not provided, the training set is used.}
+\item{d_test}{A \code{list} of the structure outlined in section "Argument
+\code{d_test}" below, providing test data for evaluating the predictive
+performance of the submodels as well as of the reference model. If \code{NULL},
+the training data is used.}
 
 \item{method}{The method for the search part. Possible options are \code{"L1"} for
-L1 search and \code{"forward"} for forward search. If \code{NULL}, then \code{"forward"}
-is used if the reference model has multilevel or additive terms and \code{"L1"}
-otherwise. See also section "Details" below.}
+L1 search and \code{"forward"} for forward search. If \code{NULL}, then internally,
+\code{"L1"} is used, except if the reference model has multilevel or additive
+terms or if \code{!is.null(search_terms)}. See also section "Details" below.}
 
-\item{ndraws}{Number of posterior draws used in the search part. \strong{Caution:}
-For \code{ndraws <= 20}, the value of \code{ndraws} is passed to \code{nclusters} (so that
-clustering is used). Ignored if \code{nclusters} is not \code{NULL} or in case of L1
-search (because L1 search always uses a single cluster). See also section
-"Details" below.}
+\item{ndraws}{Number of posterior draws used in the search part. Ignored if
+\code{nclusters} is not \code{NULL} or in case of L1 search (because L1 search always
+uses a single cluster). If both (\code{nclusters} and \code{ndraws}) are \code{NULL}, the
+number of posterior draws from the reference model is used for \code{ndraws}.
+See also section "Details" below.}
 
 \item{nclusters}{Number of clusters of posterior draws used in the search
 part. Ignored in case of L1 search (because L1 search always uses a single
@@ -59,9 +62,10 @@ cluster). For the meaning of \code{NULL}, see argument \code{ndraws}. See also
 section "Details" below.}
 
 \item{ndraws_pred}{Only relevant if \code{refit_prj} is \code{TRUE}. Number of
-posterior draws used in the evaluation part. \strong{Caution:} For \code{ndraws_pred <= 20}, the value of \code{ndraws_pred} is passed to \code{nclusters_pred} (so that
-clustering is used). Ignored if \code{nclusters_pred} is not \code{NULL}. See also
-section "Details" below.}
+posterior draws used in the evaluation part. Ignored if \code{nclusters_pred} is
+not \code{NULL}. If both (\code{nclusters_pred} and \code{ndraws_pred}) are \code{NULL}, the
+number of posterior draws from the reference model is used for
+\code{ndraws_pred}. See also section "Details" below.}
 
 \item{nclusters_pred}{Only relevant if \code{refit_prj} is \code{TRUE}. Number of
 clusters of posterior draws used in the evaluation part. For the meaning of
@@ -76,7 +80,8 @@ evaluation part.}
 continued. If \code{NULL}, then \code{min(19, D)} is used where \code{D} is the number of
 terms in the reference model (or in \code{search_terms}, if supplied). Note that
 \code{nterms_max} does not count the intercept, so use \code{nterms_max = 0} for the
-intercept-only model.}
+intercept-only model. (Correspondingly, \code{D} above does not count the
+intercept.)}
 
 \item{verbose}{A single logical value indicating whether to print out
 additional information during the computations.}
@@ -105,28 +110,34 @@ those predictors have no cost and will therefore be selected first, whereas
 \code{Inf} means those predictors will never be selected. If \code{NULL}, then \code{1} is
 used for each predictor.}
 
-\item{search_terms}{A custom character vector of terms to consider for the
-search. The intercept (\code{"1"}) needs to be included explicitly. The default
-considers all the terms in the reference model's formula.}
+\item{search_terms}{Only relevant for forward search. A custom character
+vector of predictor term blocks to consider for the search. Section
+"Details" below describes more precisely what "predictor term block" means.
+The intercept (\code{"1"}) is always included internally via \code{union()}, so
+there's no difference between including it explicitly or omitting it. The
+default \code{search_terms} considers all the terms in the reference model's
+formula.}
 
 \item{seed}{Pseudorandom number generation (PRNG) seed by which the same
-results can be obtained again if needed. If \code{NULL}, no seed is set and
-therefore, the results are not reproducible. See \code{\link[=set.seed]{set.seed()}} for details.
-Here, this seed is used for clustering the reference model's posterior
-draws (if \code{!is.null(nclusters)}).}
+results can be obtained again if needed. Passed to argument \code{seed} of
+\code{\link[=set.seed]{set.seed()}}, but can also be \code{NA} to not call \code{\link[=set.seed]{set.seed()}} at all. Here,
+this seed is used for clustering the reference model's posterior draws (if
+\code{!is.null(nclusters)} or \code{!is.null(nclusters_pred)}) and for drawing new
+group-level effects when predicting from a multilevel submodel (however,
+not yet in case of a GAMM).}
 }
 \value{
 An object of class \code{vsel}. The elements of this object are not meant
-to be accessed directly but instead via helper functions (see the vignette
-or type \code{?projpred}).
+to be accessed directly but instead via helper functions (see the main
+vignette and \link{projpred-package}).
 }
 \description{
 Perform the projection predictive variable selection for GLMs, GLMMs, GAMs,
 and GAMMs. This variable selection consists of a \emph{search} part and an
 \emph{evaluation} part. The search part determines the solution path, i.e., the
-best submodel for each number of predictor terms (model size). The evaluation
-part determines the predictive performance of the submodels along the
-solution path.
+best submodel for each submodel size (number of predictor terms). The
+evaluation part determines the predictive performance of the submodels along
+the solution path.
 }
 \details{
 Arguments \code{ndraws}, \code{nclusters}, \code{nclusters_pred}, and \code{ndraws_pred}
@@ -139,7 +150,8 @@ linearly.
 
 For argument \code{method}, there are some restrictions: For a reference model
 with multilevel or additive formula terms, only the forward search is
-available.
+available. Furthermore, argument \code{search_terms} requires a forward search
+to take effect.
 
 L1 search is faster than forward search, but forward search may be more
 accurate. Furthermore, forward search may find a sparser model with
@@ -149,7 +161,43 @@ overfitting when more predictors are added.
 An L1 search may select interaction terms before the corresponding main
 terms are selected. If this is undesired, choose the forward search
 instead.
+
+The elements of the \code{search_terms} character vector don't need to be
+individual predictor terms. Instead, they can be building blocks consisting
+of several predictor terms connected by the \code{+} symbol. To understand how
+these building blocks work, it is important to know how \pkg{projpred}'s
+forward search works: It starts with an empty vector \code{chosen} which will
+later contain already selected predictor terms. Then, the search iterates
+over model sizes \eqn{j \in \{1, ..., J\}}{j = 1, ..., J}. The candidate
+models at model size \eqn{j} are constructed from those elements from
+\code{search_terms} which yield model size \eqn{j} when combined with the
+\code{chosen} predictor terms. Note that sometimes, there may be no candidate
+models for model size \eqn{j}. Also note that internally, \code{search_terms} is
+expanded to include the intercept (\code{"1"}), so the first step of the search
+(model size 1) always consists of the intercept-only model as the only
+candidate.
+
+As a \code{search_terms} example, consider a reference model with formula \code{y ~ x1 + x2 + x3}. Then, to ensure that \code{x1} is always included in the
+candidate models, specify \code{search_terms = c("x1", "x1 + x2", "x1 + x3", "x1 + x2 + x3")}. This search would start with \code{y ~ 1} as the only
+candidate at model size 1. At model size 2, \code{y ~ x1} would be the only
+candidate. At model size 3, \code{y ~ x1 + x2} and \code{y ~ x1 + x3} would be the
+two candidates. At the last model size of 4, \code{y ~ x1 + x2 + x3} would be
+the only candidate. As another example, to exclude \code{x1} from the search,
+specify \code{search_terms = c("x2", "x3", "x2 + x3")}.
 }
+\section{Argument \code{d_test}}{
+If not \code{NULL}, then \code{d_test} needs to be a \code{list} with the following
+elements:
+\itemize{
+\item \code{data}: a \code{data.frame} containing the predictor variables for the test set.
+\item \code{offset}: a numeric vector containing the offset values for the test set
+(if there is no offset, use a vector of zeros).
+\item \code{weights}: a numeric vector containing the observation weights for the test
+set (if there are no observation weights, use a vector of ones).
+\item \code{y}: a numeric vector containing the response values for the test set.
+}
+}
+
 \examples{
 if (requireNamespace("rstanarm", quietly = TRUE)) {
   # Data:

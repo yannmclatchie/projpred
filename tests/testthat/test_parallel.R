@@ -29,6 +29,7 @@ if (run_prll) {
 
 test_that("project() in parallel gives the same results as sequentially", {
   skip_if_not(run_prll)
+  skip_if_not(run_prj)
   tstsetups <- grep("\\.glm\\.", names(prjs), value = TRUE)
   for (tstsetup in tstsetups) {
     args_prj_i <- args_prj[[tstsetup]]
@@ -81,12 +82,12 @@ if (run_prll) {
     doParallel::stopImplicitCluster()
   } else if (dopar_backend == "doFuture") {
     future::plan(future::sequential)
-    options(doFuture.foreach.export = export_default$doFuture.foreach.export)
+    options(export_default)
     rm(export_default)
   } else {
     stop("Unrecognized `dopar_backend`.")
   }
 
-  options(projpred.prll_prj_trigger = trigger_default$projpred.prll_prj_trigger)
+  options(trigger_default)
   rm(trigger_default)
 }

@@ -1,5 +1,5 @@
 search_forward <- function(p_ref, refmodel, nterms_max, verbose = TRUE, opt,
-                           search_terms = NULL) {
+                           search_terms = NULL, ...) {
   iq <- ceiling(quantile(seq_len(nterms_max), 1:10 / 10))
   if (is.null(search_terms)) {
     allterms <- split_formula(refmodel$formula, data = refmodel$fetch_data())
@@ -10,7 +10,7 @@ search_forward <- function(p_ref, refmodel, nterms_max, verbose = TRUE, opt,
   chosen <- character()
   total_terms <- count_terms_chosen(allterms)
   stop_search <- min(total_terms, nterms_max)
-  submodels <- c()
+  submodls <- c()
 
   for (size in seq_len(stop_search)) {
     cands <- select_possible_terms_size(chosen, allterms, size = size)
@@ -18,14 +18,14 @@ search_forward <- function(p_ref, refmodel, nterms_max, verbose = TRUE, opt,
       next
     full_cands <- lapply(cands, function(cand) c(chosen, cand))
     subL <- lapply(full_cands, project_submodel,
-                   p_ref = p_ref, refmodel = refmodel, regul = opt$regul)
+                   p_ref = p_ref, refmodel = refmodel, regul = opt$regul, ...)
 
     ## select best candidate
     imin <- which.min(sapply(subL, "[[", "kl"))
     chosen <- c(chosen, cands[imin])
 
-    ## append submodels
-    submodels <- c(submodels, list(subL[[imin]]$submodl))
+    ## append `submodl`
+    submodls <- c(submodls, list(subL[[imin]]$submodl))
 
     if (verbose && count_terms_chosen(chosen) %in% iq) {
       print(paste0(names(iq)[max(which(count_terms_chosen(chosen) == iq))],
@@ -33,9 +33,13 @@ search_forward <- function(p_ref, refmodel, nterms_max, verbose = TRUE, opt,
     }
   }
 
-  ## reduce chosen to a list of non-redundant accumulated models
-  return(list(solution_terms = setdiff(reduce_models(chosen), "1"),
-              submodls = submodels))
+  # For `solution_terms`, `reduce_models(chosen)` used to be used instead of
+  # `chosen`. However, `reduce_models(chosen)` and `chosen` should be identical
+  # at this place because select_possible_terms_size() already avoids redundant
+  # models. Thus, use `chosen` here because it matches `submodls` (this
+  # matching is necessary because later in .get_submodels()'s `!refit_prj` case,
+  # `submodls` is indexed with integers which are based on `solution_terms`):
+  return(nlist(solution_terms = setdiff(chosen, "1"), submodls))
 }
 
 search_arma <- function(p_ref, refmodel, nterms_max, verbose = TRUE, opt,
@@ -169,24 +173,24 @@ search_L1_surrogate <- function(p_ref, d_train, family, intercept, nterms_max,
 }
 
 search_L1 <- function(p_ref, refmodel, nterms_max, penalty, opt) {
-  intercept <- refmodel$intercept
   if (nterms_max == 0) {
     stop("L1 search cannot be used for an empty (i.e. intercept-only) ",
          "reference model.")
   }
-  frame <- model.frame(refmodel$formula, refmodel$fetch_data())
-  contrasts_arg <- get_contrasts_arg_list(refmodel$formula,
-                                          refmodel$fetch_data())
-  x <- model.matrix(delete.intercept(refmodel$formula),
-                    data = frame,
-                    contrasts.arg = contrasts_arg)
+  # TODO: In the following model.matrix() call, allow user-specified contrasts
+  # to be passed to argument `contrasts.arg`. The `contrasts.arg` default
+  # (`NULL`) uses `options("contrasts")` internally, but it might be more
+  # convenient to let users specify contrasts directly. At that occasion,
+  # contrasts should also be tested thoroughly (not done until now).
+  x <- model.matrix(refmodel$formula, data = refmodel$fetch_data())
+  x <- x[, colnames(x) != "(Intercept)", drop = FALSE]
   ## it's important to keep the original order because that's the order
   ## in which lasso will estimate the parameters
   tt <- terms(refmodel$formula)
   terms_ <- attr(tt, "term.labels")
   search_path <- search_L1_surrogate(
     p_ref, nlist(x, weights = refmodel$wobs), refmodel$family,
-    intercept, ncol(x), penalty, opt
+    refmodel$intercept, ncol(x), penalty, opt
   )
   solution_terms <- collapse_contrasts_solution_path(
     refmodel$formula, colnames(x)[search_path$solution_terms],
@@ -202,17 +206,19 @@ search_L1 <- function(p_ref, refmodel, nterms_max, penalty, opt) {
       variables <- unlist(lapply(
         solution_terms[seq_len(nterms)],
         function(term) {
-          form <- as.formula(paste("~ 0 +", term))
-          contrasts_arg <- get_contrasts_arg_list(
-            form,
-            refmodel$fetch_data()
-          )
-          return(colnames(model.matrix(form,
-                                       data = refmodel$fetch_data(),
-                                       contrasts.arg = contrasts_arg)))
+          # TODO: In the following model.matrix() call, allow user-specified
+          # contrasts to be passed to argument `contrasts.arg`. The
+          # `contrasts.arg` default (`NULL`) uses `options("contrasts")`
+          # internally, but it might be more convenient to let users specify
+          # contrasts directly. At that occasion, contrasts should also be
+          # tested thoroughly (not done until now).
+          mm <- model.matrix(as.formula(paste("~ 1 +", term)),
+                             data = refmodel$fetch_data())
+          return(setdiff(colnames(mm), "(Intercept)"))
         }
       ))
       indices <- match(variables, colnames(x)[search_path$solution_terms])
+      indices <- indices[!is.na(indices)]
       beta <- search_path$beta[indices, max(indices) + 1, drop = FALSE]
       # Also reduce `x` (important for coef.subfit(), for example); note that
       # `x <- x[, variables, drop = FALSE]` should also be possible, but the

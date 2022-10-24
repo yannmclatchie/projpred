@@ -237,21 +237,64 @@ test_that("check that we correctly sort models by size", {
   expect_equal(unlist(s), as.character(submodels))
 })
 
-test_that("check redundant models", {
-  current <- c("x + (x | g)")
-  expect_true(is_next_submodel_redundant(current, "x"))
-  expect_true(is_next_submodel_redundant(current, "(1 | g)"))
-  expect_true(is_next_submodel_redundant(current, "(x | g)"))
-  expect_false(is_next_submodel_redundant(current, "(z | g)"))
-  expect_false(is_next_submodel_redundant(current, "z"))
+test_that("select_possible_terms_size() avoids redundant models", {
+  chosen <- "x1 * x2"
+  size_chosen <- count_terms_chosen(chosen)
+  expect_equal(size_chosen, 4)
+  allterms <- c("x1 * x2", "x1", "x2")
+  expect_null(
+    select_possible_terms_size(chosen, allterms, size = size_chosen + 1)
+  )
+
+  chosen <- "x + (x | g)"
+  size_chosen <- count_terms_chosen(chosen)
+  expect_equal(size_chosen, 4)
+  allterms <- c("x + (x | g)", "x", "(1 | g)", "(x | g)")
+  expect_null(
+    select_possible_terms_size(chosen, allterms, size = size_chosen + 1)
+  )
+
+  chosen <- "s(x1)"
+  size_chosen <- count_terms_chosen(chosen)
+  expect_equal(size_chosen, 2)
+  allterms <- c("s(x1)", "x1")
+  expect_null(
+    select_possible_terms_size(chosen, allterms, size = size_chosen + 1)
+  )
 })
 
-test_that("check reduce models", {
-  chosen <- c("x + (x | g)", "x", "(1 | g)", "(x | g)")
-  r <- reduce_models(chosen)
-  expect_equal(r, chosen[1])
+test_that("select_possible_terms_size() works for non-redundant models", {
+  chosen <- "x1"
+  size_chosen <- count_terms_chosen(chosen)
+  expect_equal(size_chosen, 2)
+  allterms <- c("x1 * x2", "x1", "x2")
+  expect_identical(
+    select_possible_terms_size(chosen, allterms, size = size_chosen + 1),
+    "x2"
+  )
+  chosen <- c(chosen, "x2")
+  size_chosen <- count_terms_chosen(chosen)
+  expect_equal(size_chosen, 3)
+  expect_identical(
+    select_possible_terms_size(chosen, allterms, size = size_chosen + 1),
+    "x1:x2"
+  )
 
-  chosen <- c("x", "(1 | g)", "(x | g)")
-  r <- reduce_models(chosen)
-  expect_equal(r, chosen)
+  chosen <- "x"
+  size_chosen <- count_terms_chosen(chosen)
+  expect_equal(size_chosen, 2)
+  allterms <- c("x", "(1 | g)", "(x | g)")
+  expect_identical(
+    select_possible_terms_size(chosen, allterms, size = size_chosen + 1),
+    "(1 | g)"
+  )
+
+  chosen <- "x1"
+  size_chosen <- count_terms_chosen(chosen)
+  expect_equal(size_chosen, 2)
+  allterms <- c("s(x1)", "x1")
+  expect_identical(
+    select_possible_terms_size(chosen, allterms, size = size_chosen + 1),
+    "s(x1)"
+  )
 })

@@ -11,6 +11,7 @@
   deltas = FALSE,
   alpha = 0.32,
   baseline = if (!inherits(x$refmodel, "datafit")) "ref" else "best",
+  thres_elpd = NA,
   ...
 )
 }
@@ -18,23 +19,26 @@
 \item{x}{An object of class \code{vsel} (returned by \code{\link[=varsel]{varsel()}} or \code{\link[=cv_varsel]{cv_varsel()}}).}
 
 \item{nterms_max}{Maximum submodel size for which the statistics are
-calculated. Note that \code{nterms_max} does not count the intercept, so use
-\code{nterms_max = 0} for the intercept-only model. For \code{\link[=plot.vsel]{plot.vsel()}},
-\code{nterms_max} must be at least \code{1}.}
+calculated. Using \code{NULL} is effectively the same as using
+\code{length(solution_terms(object))}. Note that \code{nterms_max} does not count the
+intercept, so use \code{nterms_max = 0} for the intercept-only model. For
+\code{\link[=plot.vsel]{plot.vsel()}}, \code{nterms_max} must be at least \code{1}.}
 
-\item{stats}{One or more character strings determining which statistics to
-calculate. Available statistics are:
+\item{stats}{One or more character strings determining which performance
+statistics (i.e., utilities or losses) to calculate. Available statistics
+are:
 \itemize{
 \item \code{"elpd"}: (expected) sum of log predictive densities.
 \item \code{"mlpd"}: mean log predictive density, that is, \code{"elpd"} divided by the
 number of observations.
 \item \code{"mse"}: mean squared error.
-\item \code{"rmse"}: root mean squared error. For the corresponding standard error,
-bootstrapping is used.
+\item \code{"rmse"}: root mean squared error. For the corresponding standard error
+and lower and upper confidence interval bounds, bootstrapping is used.
 \item \code{"acc"} (or its alias, \code{"pctcorr"}): classification accuracy
 (\code{\link[=binomial]{binomial()}} family only).
 \item \code{"auc"}: area under the ROC curve (\code{\link[=binomial]{binomial()}} family only). For the
-corresponding standard error, bootstrapping is used.
+corresponding standard error and lower and upper confidence interval
+bounds, bootstrapping is used.
 }}
 
 \item{deltas}{If \code{TRUE}, the submodel statistics are estimated as differences
@@ -42,23 +46,40 @@ from the baseline model (see argument \code{baseline}) instead of estimating the
 actual values of the statistics.}
 
 \item{alpha}{A number determining the (nominal) coverage \code{1 - alpha} of the
-normal-approximation confidence intervals. For example, \code{alpha = 0.32}
-corresponds to a coverage of 68\%, i.e., one-standard-error intervals
-(because of the normal approximation).}
+normal-approximation (or bootstrap; see argument \code{stats}) confidence
+intervals. For example, in case of the normal approximation, \code{alpha = 0.32}
+corresponds to one-standard-error intervals (because of the coverage of
+68\%).}
 
 \item{baseline}{For \code{\link[=summary.vsel]{summary.vsel()}}: Only relevant if \code{deltas} is \code{TRUE}.
 For \code{\link[=plot.vsel]{plot.vsel()}}: Always relevant. Either \code{"ref"} or \code{"best"}, indicating
 whether the baseline is the reference model or the best submodel found (in
 terms of \code{stats[1]}), respectively.}
 
+\item{thres_elpd}{Only relevant if \code{any(stats \%in\% c("elpd", "mlpd"))}. The
+threshold for the ELPD difference (taking the submodel's ELPD minus the
+baseline model's ELPD) above which the submodel's ELPD is considered to be
+close enough to the baseline model's ELPD. An equivalent rule is applied in
+case of the MLPD. See \code{\link[=suggest_size]{suggest_size()}} for a formalization. Supplying \code{NA}
+deactivates this.}
+
 \item{...}{Arguments passed to the internal function which is used for
 bootstrapping (if applicable; see argument \code{stats}). Currently, relevant
-arguments are \code{b} (the number of bootstrap samples, defaulting to \code{2000})
-and \code{seed} (see \code{\link[=set.seed]{set.seed()}}, defaulting to \code{NULL}).}
+arguments are \code{B} (the number of bootstrap samples, defaulting to \code{2000})
+and \code{seed} (see \code{\link[=set.seed]{set.seed()}}, defaulting to
+\code{sample.int(.Machine$integer.max, 1)}, but can also be \code{NA} to not call
+\code{\link[=set.seed]{set.seed()}} at all).}
 }
 \description{
 This is the \code{\link[=plot]{plot()}} method for \code{vsel} objects (returned by \code{\link[=varsel]{varsel()}} or
 \code{\link[=cv_varsel]{cv_varsel()}}).
+}
+\details{
+As long as the reference model's performance is computable, it is
+always shown in the plot as a dashed red horizontal line. If \code{baseline = "best"}, the baseline model's performance is shown as a dotted black
+horizontal line. If \code{!is.na(thres_elpd)} and \code{any(stats \%in\% c("elpd", "mlpd"))}, the value supplied to \code{thres_elpd} (which is automatically
+adapted internally in case of the MLPD or \code{deltas = FALSE}) is shown as a
+dot-dashed gray horizontal line for the reference model and, if \code{baseline = "best"}, as a long-dashed green horizontal line for the baseline model.
 }
 \examples{
 if (requireNamespace("rstanarm", quietly = TRUE)) {

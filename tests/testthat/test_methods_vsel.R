@@ -6,9 +6,14 @@ test_that("invalid `object` fails", {
   objs_invalid <- nlist(
     NULL,
     fit = fits[[1]],
-    refmod = refmods[[1]],
-    prj = prjs[[1]]
+    refmod = refmods[[1]]
   )
+  if (run_prj) {
+    objs_invalid <- c(
+      objs_invalid,
+      list(prj = prjs[[1]])
+    )
+  }
   if (run_vs) {
     objs_invalid <- c(objs_invalid, list(prj_vs = prjs_vs[[1]]))
   }
@@ -69,6 +74,9 @@ test_that(paste(
     smmry_tester(
       smmrys_vs[[tstsetup]],
       vsel_expected = vss[[tstsetup_vs]],
+      search_trms_empty_size =
+        length(args_vs[[tstsetup_vs]]$search_terms) &&
+        all(grepl("\\+", args_vs[[tstsetup_vs]]$search_terms)),
       info_str = tstsetup,
       stats_expected = args_smmry_vs[[tstsetup]]$stats,
       type_expected = args_smmry_vs[[tstsetup]]$type,
@@ -88,6 +96,9 @@ test_that(paste(
     smmry_tester(
       smmrys_cvvs[[tstsetup]],
       vsel_expected = cvvss[[tstsetup_cvvs]],
+      search_trms_empty_size =
+        length(args_cvvs[[tstsetup_cvvs]]$search_terms) &&
+        all(grepl("\\+", args_cvvs[[tstsetup_cvvs]]$search_terms)),
       info_str = tstsetup,
       stats_expected = args_smmry_cvvs[[tstsetup]]$stats,
       type_expected = args_smmry_cvvs[[tstsetup]]$type,
@@ -119,7 +130,7 @@ test_that("`x` of class \"vselsummary\" (based on varsel()) works", {
         print(tstsetup)
         print(smmrys_vs[[tstsetup]], digits = 6)
       })
-      options(width = width_orig$width)
+      options(width_orig)
       if (testthat_ed_max2) local_edition(2)
     }
   }
@@ -141,7 +152,7 @@ test_that("`x` of class \"vselsummary\" (based on cv_varsel())  works", {
         print(tstsetup)
         print(smmrys_cvvs[[tstsetup]], digits = 6)
       })
-      options(width = width_orig$width)
+      options(width_orig)
       if (testthat_ed_max2) local_edition(2)
     }
   }
@@ -257,7 +268,7 @@ test_that("`nterms_max` is capped to the maximum model size", {
 context("suggest_size()")
 
 test_that("`stat` of invalid length fails", {
-  stopifnot(length(stats_common) > 0)
+  stopifnot(length(stats_common) > 1)
   skip_if_not(run_vs)
   for (tstsetup in head(names(vss), 1)) {
     expect_error(
@@ -295,7 +306,8 @@ test_that("`stat` works", {
       suggsize <- suppressWarnings(
         suggest_size(vss[[tstsetup_vs]], stat = stat_crr, seed = suggsize_seed)
       )
-      expect_type(suggsize, "double")
+      expect_true(is.vector(suggsize, "numeric"),
+                  info = paste(tstsetup, stat_crr, sep = "__"))
       expect_length(suggsize, 1)
       if (!is.na(suggsize)) {
         expect_true(suggsize >= 0, info = paste(tstsetup, stat_crr, sep = "__"))

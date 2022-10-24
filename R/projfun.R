@@ -2,7 +2,8 @@
 # terms given in `solution_terms`. Note that "single submodel" does not refer to
 # a single fit (there are as many fits for this single submodel as there are
 # projected draws).
-project_submodel <- function(solution_terms, p_ref, refmodel, regul = 1e-4) {
+project_submodel <- function(solution_terms, p_ref, refmodel, regul = 1e-4,
+                             ...) {
   validparams <- .validate_wobs_wsample(refmodel$wobs, p_ref$weights, p_ref$mu)
   wobs <- validparams$wobs
   wsample <- validparams$wsample
@@ -18,7 +19,8 @@ project_submodel <- function(solution_terms, p_ref, refmodel, regul = 1e-4) {
     family = refmodel$family,
     weights = refmodel$wobs,
     projpred_var = p_ref$var,
-    projpred_regul = regul
+    projpred_regul = regul,
+    ...
   )
 
   if (isTRUE(getOption("projpred.check_conv", FALSE))) {
@@ -33,13 +35,13 @@ project_submodel <- function(solution_terms, p_ref, refmodel, regul = 1e-4) {
 
 # Function to project the reference model onto the submodels of given model
 # sizes `nterms`. Returns a list of submodels (each processed by
-# .init_submodel()).
+# .init_submodel(), so of class `initsubmodl`).
 .get_submodels <- function(search_path, nterms, p_ref, refmodel, regul,
-                           refit_prj = FALSE) {
+                           refit_prj = FALSE, ...) {
   if (!refit_prj) {
     # In this case, simply fetch the already computed projections, so don't
     # project again.
-    fetch_submodel <- function(nterms) {
+    fetch_submodel <- function(nterms, ...) {
       validparams <- .validate_wobs_wsample(
         refmodel$wobs, search_path$p_sel$weights, search_path$p_sel$mu
       )
@@ -57,14 +59,14 @@ project_submodel <- function(solution_terms, p_ref, refmodel, regul = 1e-4) {
     }
   } else {
     # In this case, project again.
-    fetch_submodel <- function(nterms) {
+    fetch_submodel <- function(nterms, ...) {
       return(project_submodel(
         solution_terms = utils::head(search_path$solution_terms, nterms),
-        p_ref = p_ref, refmodel = refmodel, regul = regul
+        p_ref = p_ref, refmodel = refmodel, regul = regul, ...
       ))
     }
   }
-  return(lapply(nterms, fetch_submodel))
+  return(lapply(nterms, fetch_submodel, ...))
 }
 
 .validate_wobs_wsample <- function(ref_wobs, ref_wsample, ref_mu) {
@@ -86,9 +88,12 @@ project_submodel <- function(solution_terms, p_ref, refmodel, regul = 1e-4) {
 
 .init_submodel <- function(submodl, p_ref, refmodel, solution_terms, wobs,
                            wsample) {
-  p_ref$mu <- refmodel$family$linkinv(
-    refmodel$family$linkfun(p_ref$mu) + refmodel$offset
-  )
+  # Take offsets into account (the `if ()` condition is added for efficiency):
+  if (!all(refmodel$offset == 0)) {
+    p_ref$mu <- refmodel$family$linkinv(
+      refmodel$family$linkfun(p_ref$mu) + refmodel$offset
+    )
+  }
   if (!(all(is.na(p_ref$var)) ||
         refmodel$family$family %in% c("gaussian", "Student_t"))) {
     stop("For family `", refmodel$family$family, "()`, .init_submodel() might ",
@@ -98,19 +103,21 @@ project_submodel <- function(solution_terms, p_ref, refmodel, regul = 1e-4) {
   }
   if (refmodel$family$family == "Student_t") {
     stop("For the `Student_t()` family, .init_submodel() is not finished yet.")
-    ### TODO (`Student_t()` family): Check if this is needed (perhaps with some
+    ### TODO (Student_t()): Check if this is needed (perhaps with some
     ### modifications) or if something completely different is needed (there
     ### used to be no special handling of the `Student_t()` family here at all):
     # pobs <- pseudo_data(
     #   f = 0, y = p_ref$mu, family = refmodel$family, weights = wobs,
     #   offset = refmodel$offset
     # )
-    # ### TODO: Add `dis` and perhaps other elements here?:
+    # ### TODO (Student_t()): Add `dis` and perhaps other elements here?:
     # p_ref <- list(mu = pobs$z, var = p_ref$var)
     # ###
-    # p_ref$mu <- refmodel$family$linkinv(
-    #   refmodel$family$linkfun(p_ref$mu) + refmodel$offset
-    # )
+    # if (!all(refmodel$offset == 0)) {
+    #   p_ref$mu <- refmodel$family$linkinv(
+    #     refmodel$family$linkfun(p_ref$mu) + refmodel$offset
+    #   )
+    # }
     # wobs <- pobs$wobs
     ###
   }
@@ -123,5 +130,8 @@ project_submodel <- function(solution_terms, p_ref, refmodel, regul = 1e-4) {
                        nlist(mu, dis)),
     wsample
   )
-  return(nlist(dis, kl, weights = wsample, solution_terms, submodl))
+  return(structure(
+    nlist(dis, kl, weights = wsample, solution_terms, submodl),
+    class = "initsubmodl"
+  ))
 }

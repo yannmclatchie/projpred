@@ -32,16 +32,17 @@ init_refmodel(
   cvfun = NULL,
   cvfits = NULL,
   dis = NULL,
+  cvrefbuilder = NULL,
   ...
 )
 }
 \arguments{
 \item{object}{Object from which the reference model is created. For
-\code{\link[=init_refmodel]{init_refmodel()}}, an object on which the functions from arguments
-\code{extract_model_data} and \code{ref_predfun} can be applied, with a \code{NULL} object
-being treated specially (see section "Value" below). For
-\code{\link[=get_refmodel.default]{get_refmodel.default()}}, an object on which function \code{\link[=family]{family()}} can be
-applied to retrieve the family (if argument \code{family} is \code{NULL}),
+\code{\link[=init_refmodel]{init_refmodel()}}, an object that the functions from arguments
+\code{extract_model_data} and \code{ref_predfun} can be applied to, with a \code{NULL}
+object being treated specially (see section "Value" below). For
+\code{\link[=get_refmodel.default]{get_refmodel.default()}}, an object that function \code{\link[=family]{family()}} can be applied
+to in order to retrieve the family (if argument \code{family} is \code{NULL}),
 additionally to the properties required for \code{\link[=init_refmodel]{init_refmodel()}}. For
 non-default methods of \code{\link[=get_refmodel]{get_refmodel()}}, an object of the corresponding
 class.}
@@ -57,10 +58,13 @@ For additive formulas, see also packages \pkg{mgcv} (in particular,
 function \code{\link[mgcv:gam]{mgcv::gam()}}) and \pkg{gamm4} (in particular, function
 \code{\link[gamm4:gamm4]{gamm4::gamm4()}}) as well as the notes in section "Formula terms" below.}
 
-\item{family}{A \code{\link{family}} object representing the observational model (i.e.,
-the distributional family for the response).}
+\item{family}{An object of class \code{family} representing the observational
+model (i.e., the distributional family for the response). May be \code{NULL} for
+\code{\link[=get_refmodel.default]{get_refmodel.default()}} in which case the family is retrieved from
+\code{object}.}
 
-\item{data}{Data used for fitting the reference model.}
+\item{data}{Data used for fitting the reference model. Any \code{contrasts}
+attributes of the dataset's columns are silently removed.}
 
 \item{ref_predfun}{Prediction function for the linear predictor of the
 reference model, including offsets (if existing). See also section
@@ -71,8 +75,8 @@ used instead.}
 \item{div_minimizer}{A function for minimizing the Kullback-Leibler (KL)
 divergence from a submodel to the reference model (i.e., for performing the
 projection of the reference model onto a submodel). The output of
-\code{div_minimizer} is used, e.g., by \code{proj_predfun}'s argument \code{fit}. See also
-section "Arguments \code{ref_predfun}, \code{proj_predfun}, and \code{div_minimizer}"
+\code{div_minimizer} is used, e.g., by \code{proj_predfun}'s argument \code{fits}. See
+also section "Arguments \code{ref_predfun}, \code{proj_predfun}, and \code{div_minimizer}"
 below.}
 
 \item{proj_predfun}{Prediction function for the linear predictor of a
@@ -86,23 +90,39 @@ section "Argument \code{extract_model_data}" below.}
 
 \item{cvfun}{For \eqn{K}-fold CV only. A function that, given a fold indices
 vector, fits the reference model separately for each fold and returns the
-\eqn{K} fitted model objects as a \code{list}. If \code{object} is \code{NULL}, \code{cvfun}
-may be \code{NULL} for using an internal default. Note that \code{cvfits} takes
-precedence over \code{cvfun}, i.e., if both are provided, \code{cvfits} is used.}
+\eqn{K} model fits as a \code{list}. Each of the \eqn{K} model fits needs to be
+a \code{list}. If \code{object} is \code{NULL}, \code{cvfun} may be \code{NULL} for using an
+internal default. Only one of \code{cvfits} and \code{cvfun} needs to be provided
+(for \eqn{K}-fold CV). Note that \code{cvfits} takes precedence over \code{cvfun},
+i.e., if both are provided, \code{cvfits} is used.}
 
-\item{cvfits}{For \eqn{K}-fold CV only. A \code{list} with one sub-\code{list} called
-\code{fits} containing the \eqn{K} fitted model objects from which reference
-model structures are created. The \code{cvfits} \code{list} (i.e., the super-\code{list})
-needs to have attributes \code{K} and \code{folds}: \code{K} has to be a single integer
-giving the number of folds and \code{folds} has to be an integer vector giving
-the fold indices (one fold index per observation). Note that \code{cvfits} takes
-precedence over \code{cvfun}, i.e., if both are provided, \code{cvfits} is used.}
+\item{cvfits}{For \eqn{K}-fold CV only. A \code{list} containing a sub-\code{list}
+called \code{fits} containing the \eqn{K} model fits from which reference model
+structures are created. The \code{cvfits} \code{list} (i.e., the super-\code{list}) needs
+to have attributes \code{K} and \code{folds}: \code{K} has to be a single integer giving
+the number of folds and \code{folds} has to be an integer vector giving the fold
+indices (one fold index per observation). Each element of \code{cvfits$fits}
+(i.e., each of the \eqn{K} model fits) needs to be a list. Only one of
+\code{cvfits} and \code{cvfun} needs to be provided (for \eqn{K}-fold CV). Note that
+\code{cvfits} takes precedence over \code{cvfun}, i.e., if both are provided,
+\code{cvfits} is used.}
 
 \item{dis}{A vector of posterior draws for the dispersion parameter (if
 existing). May be \code{NULL} if the model has no dispersion parameter or if the
-model does have a dispersion parameter, but \code{object} is \code{NULL}. Note that
-for the \code{\link[=gaussian]{gaussian()}} \code{family}, \code{dis} is the standard deviation, not the
-variance.}
+model does have a dispersion parameter, but \code{object} is \code{NULL} (in which
+case \code{0} is used for \code{dis}). Note that for the \code{\link[=gaussian]{gaussian()}} \code{family}, \code{dis}
+is the standard deviation, not the variance.}
+
+\item{cvrefbuilder}{For \eqn{K}-fold CV only. A function that, given a
+reference model fit for fold \eqn{k \in \{1, ..., K\}}{k = 1, ..., K} (this
+model fit is the \eqn{k}-th element of the return value of \code{cvfun} or the
+\eqn{k}-th element of \code{cvfits$fits}, extended by elements \code{omitted}
+(containing the indices of the left-out observations in that fold) and
+\code{projpred_k} (containing the integer \eqn{k})), returns an object of the
+same type as \code{\link[=init_refmodel]{init_refmodel()}} does. Argument \code{cvrefbuilder} may be \code{NULL}
+for using an internal default: \code{\link[=get_refmodel]{get_refmodel()}} if \code{object} is not \code{NULL}
+and a function calling \code{\link[=init_refmodel]{init_refmodel()}} appropriately (with the assumption
+\code{dis = 0}) if \code{object} is \code{NULL}.}
 }
 \value{
 An object that can be passed to all the functions that take the
@@ -133,13 +153,14 @@ analogously for higher-order joint effects, e.g., of three predictors).
 
 \section{Arguments \code{ref_predfun}, \code{proj_predfun}, and \code{div_minimizer}}{
 Arguments \code{ref_predfun}, \code{proj_predfun}, and \code{div_minimizer} may be \code{NULL}
-for using an internal default. Otherwise, let \eqn{N} denote the number of
-observations (in case of CV, these may be reduced to each fold),
-\eqn{S_{\mbox{ref}}}{S_ref} the number of posterior draws for the reference
-model's parameters, and \eqn{S_{\mbox{prj}}}{S_prj} the number of (possibly
-clustered) parameter draws for projection (short: the number of projected
-draws). Then the functions supplied to these arguments need to have the
-following prototypes:
+for using an internal default (see \link{projpred-package} for the functions used
+by the default divergence minimizer). Otherwise, let \eqn{N} denote the
+number of observations (in case of CV, these may be reduced to each fold),
+\eqn{S_{\mathrm{ref}}}{S_ref} the number of posterior draws for the reference
+model's parameters, and \eqn{S_{\mathrm{prj}}}{S_prj} the number of draws for
+the parameters of a submodel that the reference model has been projected onto
+(short: the number of projected draws). Then the functions supplied to these
+arguments need to have the following prototypes:
 \itemize{
 \item \code{ref_predfun}: \code{ref_predfun(fit, newdata = NULL)} where:
 \itemize{
@@ -152,7 +173,7 @@ form of a \code{data.frame}).
 }
 \item \code{proj_predfun}: \code{proj_predfun(fits, newdata)} where:
 \itemize{
-\item \code{fits} accepts a \code{list} of length \eqn{S_{\mbox{prj}}}{S_prj}
+\item \code{fits} accepts a \code{list} of length \eqn{S_{\mathrm{prj}}}{S_prj}
 containing this number of submodel fits. This \code{list} is the same as that
 returned by \code{\link[=project]{project()}} in its output element \code{submodl} (which in turn is
 the same as the return value of \code{div_minimizer}, except if \code{\link[=project]{project()}}
@@ -165,28 +186,29 @@ as with \code{refit_prj = FALSE}).
 be able to be called with the following arguments:
 \itemize{
 \item \code{formula} accepts either a standard \code{\link{formula}} with a single response
-(if \eqn{S_{\mbox{prj}} = 1}{S_prj = 1}) or a \code{\link{formula}} with
-\eqn{S_{\mbox{prj}} > 1}{S_prj > 1} response variables \code{\link[=cbind]{cbind()}}-ed on
+(if \eqn{S_{\mathrm{prj}} = 1}{S_prj = 1}) or a \code{\link{formula}} with
+\eqn{S_{\mathrm{prj}} > 1}{S_prj > 1} response variables \code{\link[=cbind]{cbind()}}-ed on
 the left-hand side in which case the projection has to be performed for
 each of the response variables separately.
 \item \code{data} accepts a \code{data.frame} to be used for the projection.
-\item \code{family} accepts a \code{\link{family}} object.
+\item \code{family} accepts an object of class \code{family}.
 \item \code{weights} accepts either observation weights (at least in the form of a
 numeric vector) or \code{NULL} (for using a vector of ones as weights).
-\item \code{projpred_var} accepts an \eqn{N \times S_{\mbox{prj}}}{N x S_prj}
+\item \code{projpred_var} accepts an \eqn{N \times S_{\mathrm{prj}}}{N x S_prj}
 matrix of predictive variances (necessary for \pkg{projpred}'s internal
 GLM fitter).
 \item \code{projpred_regul} accepts a single numeric value as supplied to argument
 \code{regul} of \code{\link[=project]{project()}}, for example.
+\item \code{...} accepts further arguments specified by the user.
 }
 }
 
 The return value of these functions needs to be:
 \itemize{
-\item \code{ref_predfun}: an \eqn{N \times S_{\mbox{ref}}}{N x S_ref} matrix.
-\item \code{proj_predfun}: an \eqn{N \times S_{\mbox{prj}}}{N x S_prj} matrix.
-\item \code{div_minimizer}: a \code{list} of length \eqn{S_{\mbox{prj}}}{S_prj} containing
-this number of submodel fits.
+\item \code{ref_predfun}: an \eqn{N \times S_{\mathrm{ref}}}{N x S_ref} matrix.
+\item \code{proj_predfun}: an \eqn{N \times S_{\mathrm{prj}}}{N x S_prj} matrix.
+\item \code{div_minimizer}: a \code{list} of length \eqn{S_{\mathrm{prj}}}{S_prj}
+containing this number of submodel fits.
 }
 }
 
@@ -202,7 +224,8 @@ where:
 \item \code{object} accepts the reference model fit as given in argument \code{object} (but
 possibly re-fitted to a subset of the observations, as done in \eqn{K}-fold
 CV).
-\item \code{newdata} accepts data for new observations (at least in the form of a
+\item \code{newdata} accepts either \code{NULL} (for using the original dataset, typically
+stored in \code{object}) or data for new observations (at least in the form of a
 \code{data.frame}).
 \item \code{wrhs} accepts at least either \code{NULL} (for using a vector of ones) or a
 right-hand side formula consisting only of the variable in \code{newdata}
@@ -217,7 +240,8 @@ element \code{y} (see below) shall be \code{NULL} (\code{TRUE}) or not (\code{FA
 The return value of \code{extract_model_data} needs to be a \code{list} with elements
 \code{y}, \code{weights}, and \code{offset}, each being a numeric vector containing the data
 for the response, the observation weights, and the offsets, respectively. An
-exception is that \code{y} may also be \code{NULL} (depending on argument \code{extract_y}).
+exception is that \code{y} may also be \code{NULL} (depending on argument \code{extract_y})
+or a \code{factor}.
 }
 
 \examples{
@@ -262,11 +286,12 @@ if (requireNamespace("rstanarm", quietly = TRUE)) {
       }
 
       args <- projpred:::nlist(object, newdata, wrhs, orhs, resp_form)
-      return(projpred:::do_call(projpred:::.extract_model_data, args))
+      return(projpred::do_call(projpred:::.extract_model_data, args))
     },
     cvfun = function(folds) {
-      rstanarm::kfold(fit, K = max(folds), save_fits = TRUE,
-                      folds = folds)$fits[, "fit"]
+      kfold(
+        fit, K = max(folds), save_fits = TRUE, folds = folds, cores = 1
+      )$fits[, "fit"]
     },
     dis = as.matrix(fit)[, "sigma"]
   )

@@ -1,52 +1,78 @@
 context("miscellaneous")
 
+# .get_refdist() ----------------------------------------------------------
+
+## ndraws and nclusters ---------------------------------------------------
+
 test_that(paste(
-  ".get_refdist(): `seed` works (and restores the RNG state afterwards)"
+  ".get_refdist(): `ndraws = NULL` and `nclusters = NULL` leads to",
+  "`ndraws = S` (and `nclusters = NULL`)"
 ), {
-  for (tstsetup in names(refmods)) {
-    .Random.seed_orig1 <- .Random.seed
-    refdist_orig <- .get_refdist(refmods[[tstsetup]], nclusters = 10,
-                                 seed = seed_tst)
-    .Random.seed_orig2 <- .Random.seed
-    rand_orig <- runif(1) # Just to advance `.Random.seed[2]`.
-    .Random.seed_new1 <- .Random.seed
-    refdist_new <- .get_refdist(refmods[[tstsetup]], nclusters = 10,
-                                seed = seed_tst + 1L)
-    .Random.seed_new2 <- .Random.seed
-    rand_new <- runif(1) # Just to advance `.Random.seed[2]`.
-    .Random.seed_repr1 <- .Random.seed
-    refdist_repr <- .get_refdist(refmods[[tstsetup]], nclusters = 10,
-                                 seed = seed_tst)
-    .Random.seed_repr2 <- .Random.seed
-    # Expected equality:
-    expect_equal(refdist_repr, refdist_orig, info = tstsetup)
-    expect_equal(.Random.seed_orig2, .Random.seed_orig1, info = tstsetup)
-    expect_equal(.Random.seed_new2, .Random.seed_new1, info = tstsetup)
-    expect_equal(.Random.seed_repr2, .Random.seed_repr1, info = tstsetup)
-    # Expected inequality:
-    expect_false(isTRUE(all.equal(refdist_new, refdist_orig)),
-                 info = tstsetup)
-    expect_false(isTRUE(all.equal(rand_new, rand_orig)), info = tstsetup)
-    expect_false(isTRUE(all.equal(.Random.seed_new2, .Random.seed_orig2)),
-                 info = tstsetup)
-    expect_false(isTRUE(all.equal(.Random.seed_repr2, .Random.seed_orig2)),
-                 info = tstsetup)
-    expect_false(isTRUE(all.equal(.Random.seed_repr2, .Random.seed_new2)),
-                 info = tstsetup)
+  if (exists(".Random.seed", envir = .GlobalEnv)) {
+    rng_old <- get(".Random.seed", envir = .GlobalEnv)
   }
+  set.seed(seed2_tst)
+  for (tstsetup in names(refmods)) {
+    refdist <- .get_refdist(refmods[[tstsetup]])
+    # The following refdist_tester() call runs more expectations than necessary
+    # for this test (only the one for `refdist$clust_used` and the dim() test
+    # for `refdist$mu` are actually necessary):
+    refdist_tester(
+      refdist,
+      nprjdraws_expected = nrefdraws,
+      clust_expected = FALSE,
+      info_str = tstsetup
+    )
+  }
+  if (exists("rng_old")) assign(".Random.seed", rng_old, envir = .GlobalEnv)
 })
 
+test_that(paste(
+  "`ndraws` and/or `nclusters` too big causes them to be cut off at the number",
+  "of posterior draws in the reference model"
+), {
+  if (exists(".Random.seed", envir = .GlobalEnv)) {
+    rng_old <- get(".Random.seed", envir = .GlobalEnv)
+  }
+  set.seed(seed2_tst)
+  for (tstsetup in names(refmods)) {
+    for (ndraws_crr in list(nrefdraws + 1L)) {
+      for (nclusters_crr in list(NULL, nrefdraws + 1L)) {
+        refdist <- .get_refdist(refmods[[tstsetup]],
+                                ndraws = ndraws_crr,
+                                nclusters = nclusters_crr)
+        refdist_tester(
+          refdist,
+          nprjdraws_expected = nrefdraws,
+          clust_expected = FALSE,
+          info_str = paste(tstsetup, ndraws_crr, nclusters_crr, sep = "__")
+        )
+      }
+    }
+  }
+  if (exists("rng_old")) assign(".Random.seed", rng_old, envir = .GlobalEnv)
+})
+
+# rstanarm: special formulas ----------------------------------------------
+
 test_that("rstanarm: special formulas work", {
-  # Note: This test only tests that **rstanarm** handles special formulas
-  # correctly. Within projpred, arithmetic expressions on the left-hand side of
-  # a formula are handled by get_refmodel() and init_refmodel(); arithmetic
-  # expressions on the right-hand side of a formula are handled by the
-  # `div_minimizer`.
+  # Skip this on CRAN to avoid depending too strongly on rstanarm internals:
+  skip_on_cran()
+  # Note: This test only tests that rstanarm handles special formulas correctly.
+  # Within projpred, arithmetic expressions on the left-hand side of a formula
+  # are handled by get_refmodel() and init_refmodel(); arithmetic expressions on
+  # the right-hand side of a formula are handled by the `div_minimizer`.
   tstsetups <- grep("^rstanarm.*\\.spclformul", names(fits), value = TRUE)
   # Compare the "special formula" fit with the corresponding "standard formula"
   # fit (which does not have the special formula elements):
   for (tstsetup in tstsetups) {
     mf_spclformul <- fits[[tstsetup]]$model
+    if (grepl("\\.glmm\\.", tstsetup)) {
+      expect_null(mf_spclformul, info = tstsetup)
+      mf_spclformul <- fits[[tstsetup]]$glmod$fr
+    } else {
+      expect_false(is.null(mf_spclformul), info = tstsetup)
+    }
     nms_spclformul <- setdiff(
       grep("y_|xco", names(mf_spclformul), value = TRUE),
       "xco.1"
@@ -54,16 +80,24 @@ test_that("rstanarm: special formulas work", {
 
     tstsetup_stdformul <- sub("\\.spclformul", ".stdformul", tstsetup)
     stopifnot(tstsetup_stdformul != tstsetup)
-    stopifnot(tstsetup_stdformul %in% names(fits))
-    mf_stdformul <- fits[[tstsetup_stdformul]]$model
-    nms_stdformul <- setdiff(
-      grep("y_|xco", names(mf_stdformul), value = TRUE),
-      "xco.1"
-    )
-
-    expect_equal(mf_spclformul[, setdiff(names(mf_spclformul), nms_spclformul)],
-                 mf_stdformul[, setdiff(names(mf_stdformul), nms_stdformul)],
-                 info = tstsetup)
+    if (tstsetup_stdformul %in% names(fits)) {
+      mf_stdformul <- fits[[tstsetup_stdformul]]$model
+      if (grepl("\\.glmm\\.", tstsetup_stdformul)) {
+        expect_null(mf_stdformul, info = tstsetup_stdformul)
+        mf_stdformul <- fits[[tstsetup_stdformul]]$glmod$fr
+      } else {
+        expect_false(is.null(mf_stdformul), info = tstsetup_stdformul)
+      }
+      nms_stdformul <- setdiff(
+        grep("y_|xco", names(mf_stdformul), value = TRUE),
+        "xco.1"
+      )
+      expect_equal(mf_spclformul[, setdiff(names(mf_spclformul),
+                                           nms_spclformul)],
+                   mf_stdformul[, setdiff(names(mf_stdformul),
+                                          nms_stdformul)],
+                   info = tstsetup)
+    }
     # Check arithmetic expressions:
     for (nm_spclformul in nms_spclformul) {
       expect_equal(mf_spclformul[, nm_spclformul],
@@ -72,6 +106,8 @@ test_that("rstanarm: special formulas work", {
     }
   }
 })
+
+# pseudo_data() -----------------------------------------------------------
 
 test_that(paste(
   "`pseudo_data(f = 0, [...], family = extend_family(gaussian()), [...])` is",

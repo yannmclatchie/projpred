@@ -2,10 +2,11 @@ context("datafit")
 
 # Setup -------------------------------------------------------------------
 
-if (!requireNamespace("glmnet", quietly = TRUE)) {
-  stop("Package \"glmnet\" is needed for these tests. Please install it.",
-       call. = FALSE)
-}
+# Note: Since PR #351, offsets are not supported anymore for `datafit`s. Here,
+# we use the data as generated in `setup.R`, i.e., sometimes with offsets. So
+# far, this doesn't seem to cause problems in the submodel fitting routines, but
+# it might do in the future. Then, either the scenarios including offsets have
+# to be excluded or new data has to be generated without offsets.
 
 .extrmoddat_datafit <- function(object, newdata = NULL, wrhs = NULL,
                                 orhs = NULL, resp_form = NULL) {
@@ -21,16 +22,10 @@ if (!requireNamespace("glmnet", quietly = TRUE)) {
     weights <- wrhs
   }
 
-  if (inherits(orhs, "formula")) {
-    offset <- eval_rhs(orhs, newdata)
-  } else if (is.null(orhs)) {
-    offset <- newdata$offs_col
-  } else {
-    offset <- orhs
-  }
+  offset <- rep(0, nrow(newdata))
 
   if (inherits(resp_form, "formula")) {
-    y <- eval_rhs(resp_form, newdata)
+    y <- eval_el2(resp_form, newdata)
   } else {
     y <- NULL
   }
@@ -41,10 +36,11 @@ if (!requireNamespace("glmnet", quietly = TRUE)) {
 ## Reference model --------------------------------------------------------
 ## (actually "datafit"s)
 
-# Exclude the case which was added for K-fold CV only:
+# Exclude brms fits (since `datafit`s don't make use of a reference model fit,
+# it doesn't make a difference if rstanarm or brms is used as the basis here for
+# retrieving the formula, data, and family):
 args_datafit <- lapply(setNames(
-  nm = grep("\\.glm\\.gauss\\.stdformul\\.without_wobs", names(fits),
-            value = TRUE, invert = TRUE)
+  nm = grep("^brms\\.", names(fits), value = TRUE, invert = TRUE)
 ), function(tstsetup_fit) {
   c(nlist(tstsetup_fit), only_nonargs(args_fit[[tstsetup_fit]]))
 })
@@ -66,9 +62,6 @@ datafits <- lapply(args_datafit, function(args_datafit_i) {
     }
     if (args_datafit_i$fam_nm == "brnll") {
       newdata$wobs_col <- 1
-    }
-    if (grepl("\\.without_offs", args_datafit_i$tstsetup_fit)) {
-      newdata$offs_col <- 0
     }
     args <- nlist(object, newdata, wrhs, orhs, resp_form)
     return(do.call(.extrmoddat_datafit, args))
@@ -126,6 +119,7 @@ if (run_cvvs) {
   args_cvvs_datafit <- lapply(args_cvvs_datafit, function(args_cvvs_i) {
     args_cvvs_i$cv_method <- NULL
     args_cvvs_i$K <- NULL
+    args_cvvs_i$validate_search <- TRUE
     return(c(args_cvvs_i, list(cv_method = "kfold", K = K_tst)))
   })
   names(args_cvvs_datafit) <- gsub("default_cvmeth", "kfold",
@@ -205,11 +199,6 @@ test_that("init_refmodel(): `object` of class \"datafit\" works", {
     } else {
       wobs_expected_crr <- rep(1, nobsv)
     }
-    if (grepl("\\.with_offs", tstsetup)) {
-      offs_expected_crr <- offs_tst
-    } else {
-      offs_expected_crr <- rep(0, nobsv)
-    }
     refmodel_tester(
       datafits[[tstsetup]],
       is_datafit = TRUE,
@@ -218,7 +207,7 @@ test_that("init_refmodel(): `object` of class \"datafit\" works", {
       formul_expected = get_formul_from_fit(fits[[tstsetup_fit]]),
       with_spclformul = with_spclformul_crr,
       wobs_expected = wobs_expected_crr,
-      offs_expected = offs_expected_crr,
+      offs_expected = rep(0, nobsv),
       nrefdraws_expected = 1L,
       fam_orig = get(paste0("f_", args_datafit[[tstsetup]]$fam_nm)),
       mod_nm = args_datafit[[tstsetup]]$mod_nm,
@@ -257,8 +246,11 @@ test_that(paste(
         datafits[[args_vs_datafit[[tstsetup]]$tstsetup_datafit]],
       solterms_len_expected = args_vs_datafit[[tstsetup]]$nterms_max,
       method_expected = meth_exp_crr,
-      nclusters_expected = 1L,
-      nclusters_pred_expected = 1L,
+      nprjdraws_search_expected = 1L,
+      nprjdraws_eval_expected = 1L,
+      search_trms_empty_size =
+        length(args_vs_datafit[[tstsetup]]$search_terms) &&
+        all(grepl("\\+", args_vs_datafit[[tstsetup]]$search_terms)),
       extra_tol = 1.2,
       info_str = tstsetup
     )
@@ -286,8 +278,11 @@ test_that(paste(
       method_expected = meth_exp_crr,
       cv_method_expected = "kfold",
       valsearch_expected = args_cvvs_datafit[[tstsetup]]$validate_search,
-      nclusters_expected = 1L,
-      nclusters_pred_expected = 1L,
+      nprjdraws_search_expected = 1L,
+      nprjdraws_eval_expected = 1L,
+      search_trms_empty_size =
+        length(args_cvvs_datafit[[tstsetup]]$search_terms) &&
+        all(grepl("\\+", args_cvvs_datafit[[tstsetup]]$search_terms)),
       extra_tol = 1.2,
       info_str = tstsetup
     )
@@ -297,6 +292,7 @@ test_that(paste(
 ## Projection -------------------------------------------------------------
 
 test_that("project(): `object` of class \"datafit\" fails", {
+  skip_if_not(run_prj)
   # A prerequisite for this project() test (otherwise, it would have to be
   # adapted):
   stopifnot(all(names(args_datafit) %in% names(args_ref)))
@@ -304,6 +300,7 @@ test_that("project(): `object` of class \"datafit\" fails", {
   tstsetups <- grep("\\.solterms_x.*\\.clust$", names(args_prj), value = TRUE)
   for (tstsetup in tstsetups) {
     args_prj_i <- args_prj[[tstsetup]]
+    if (!args_prj_i$tstsetup_ref %in% names(datafits)) next
     expect_error(
       do.call(project, c(
         list(object = datafits[[args_prj_i$tstsetup_ref]],
@@ -418,7 +415,6 @@ test_that(paste(
         tail(nobsv_tst, 1)
       ),
       weightsnew = ~ wobs_col,
-      offsetnew = ~ offs_col,
       filter_nterms = nterms_crr[1]
     )
     pl_tester(pl_with_args,
@@ -433,7 +429,7 @@ test_that(paste(
         print(tstsetup)
         print(rlang::hash(pl_with_args))
       })
-      options(width = width_orig$width)
+      options(width_orig)
       if (testthat_ed_max2) local_edition(2)
     }
   }
@@ -457,7 +453,6 @@ test_that(paste(
       prjs_vs_datafit[[tstsetup]],
       newdata = head(dat, tail(nobsv_tst, 1)),
       weightsnew = ~ wobs_col,
-      offsetnew = ~ offs_col,
       filter_nterms = nterms_crr[1],
       nresample_clusters = tail(nresample_clusters_tst, 1),
       .seed = seed2_tst
@@ -474,7 +469,7 @@ test_that(paste(
         print(tstsetup)
         print(rlang::hash(pp_with_args))
       })
-      options(width = width_orig$width)
+      options(width_orig)
       if (testthat_ed_max2) local_edition(2)
     }
   }
@@ -524,6 +519,9 @@ test_that(paste(
     smmry_tester(
       smmry,
       vsel_expected = vss_datafit[[tstsetup]],
+      search_trms_empty_size =
+        length(args_vs_datafit[[tstsetup]]$search_terms) &&
+        all(grepl("\\+", args_vs_datafit[[tstsetup]]$search_terms)),
       info_str = tstsetup,
       stats_expected = stats_common,
       type_expected = type_tst,
@@ -536,7 +534,7 @@ test_that(paste(
         print(tstsetup)
         print(smmry, digits = 6)
       })
-      options(width = width_orig$width)
+      options(width_orig)
       if (testthat_ed_max2) local_edition(2)
     }
   }
@@ -561,6 +559,9 @@ test_that(paste(
     smmry_tester(
       smmry,
       vsel_expected = cvvss_datafit[[tstsetup]],
+      search_trms_empty_size =
+        length(args_cvvs_datafit[[tstsetup]]$search_terms) &&
+        all(grepl("\\+", args_cvvs_datafit[[tstsetup]]$search_terms)),
       info_str = tstsetup,
       stats_expected = stats_common,
       type_expected = type_tst,
@@ -575,13 +576,18 @@ test_that(paste(
         print(tstsetup)
         print(smmry, digits = 6)
       })
-      options(width = width_orig$width)
+      options(width_orig)
       if (testthat_ed_max2) local_edition(2)
     }
   }
 })
 
 # Comparison with glmnet --------------------------------------------------
+
+if (!requireNamespace("glmnet", quietly = TRUE)) {
+  stop("Package \"glmnet\" is needed for these tests. Please install it.",
+       call. = FALSE)
+}
 
 # below are some tests that check Lasso solution computed with varsel is the
 # same as that of glmnet. (notice that glm_ridge and glm_elnet are already
@@ -592,6 +598,12 @@ test_that(paste(
   "L1-projection with data reference gives the same results as",
   "Lasso from glmnet."
 ), {
+  # This test sometimes behaves inpredictably when run in `R CMD check`, so skip
+  # it on CRAN:
+  skip_on_cran()
+  if (exists(".Random.seed", envir = .GlobalEnv)) {
+    rng_old <- get(".Random.seed", envir = .GlobalEnv)
+  }
   suppressWarnings(RNGversion("3.5.0"))
   set.seed(1235)
   n <- 100
@@ -600,7 +612,6 @@ test_that(paste(
   b <- seq(0, 1, length.out = nterms)
   dis <- runif(1, 0.3, 0.5)
   weights <- sample(1:4, n, replace = TRUE)
-  offset <- 0.1 * rnorm(n)
 
   fams <- list(gaussian(), binomial(), poisson())
   x_list <- lapply(fams, function(fam) x)
@@ -623,21 +634,6 @@ test_that(paste(
     nlist(y, y_glmnet, weights)
   })
 
-  median_lasso_preds <- list(
-    c(0.2774068, 0.2857059, 0.2878935, 0.2813947, 0.2237729,
-      0.2895152, 0.3225808, 0.3799348),
-    c(0.009607217, 0.015400719, -0.017591445, -0.009711566,
-      -0.023867036, -0.038964983, -0.036081074, -0.045065655),
-    c(1.8846845, 1.8830678, 1.8731548, 1.4232035, 0.9960167,
-      0.9452660, 0.6216253, 0.5856283)
-  )
-
-  solution_terms_lasso <- list(
-    c(10, 9, 6, 8, 7, 5, 4, 3, 1, 2),
-    c(10, 9, 8, 6, 7, 5, 3, 4, 2, 1),
-    c(9, 10, 6, 7, 3, 5, 2, 4, 3, 1)
-  )
-
   extract_model_data <- function(object, newdata = NULL, wrhs = NULL,
                                  orhs = NULL, extract_y = FALSE) {
     if (!is.null(object)) {
@@ -656,9 +652,6 @@ test_that(paste(
     if (is.null(object)) {
       if ("weights" %in% colnames(newdata)) {
         wrhs <- ~ weights
-      }
-      if ("offset" %in% colnames(newdata)) {
-        orhs <- ~ offset
       }
       if ("y" %in% colnames(newdata)) {
         resp_form <- ~ y
@@ -696,10 +689,8 @@ test_that(paste(
     ))
     expect_warning(
       pred1 <- proj_linpred(vs,
-                            newdata = data.frame(x = x, offset = offset,
-                                                 weights = weights),
+                            newdata = data.frame(x = x, weights = weights),
                             nterms = 0:nterms, transform = FALSE,
-                            offsetnew = ~offset,
                             refit_prj = FALSE),
       paste("^Currently, `refit_prj = FALSE` requires some caution, see GitHub",
             "issues #168 and #211\\.$"),
@@ -709,7 +700,6 @@ test_that(paste(
     # compute the results for the Lasso
     lasso <- glmnet::glmnet(x, y_glmnet,
                             family = fam$family, weights = weights,
-                            offset = offset,
                             lambda.min.ratio = lambda_min_ratio,
                             nlambda = nlambda, thresh = 1e-12)
     solution_terms <- predict(lasso, type = "nonzero", s = lasso$lambda)
@@ -717,32 +707,48 @@ test_that(paste(
     lambdainds <- sapply(unique(nselected), function(nterms) {
       max(which(nselected == nterms))
     })
-    ## lambdaval <- lasso$lambda[lambdainds]
-    ## pred2 <- predict(lasso,
-    ##   newx = x, type = "link", s = lambdaval,
-    ##   newoffset = offset
-    ## )
-
-    # check that the predictions agree (up to nterms-2 only, because glmnet
-    # terminates the coefficient path computation too early for some reason)
-    for (j in 1:(nterms - 2)) {
-      expect_true(median(pred1[[j]]$pred) - median_lasso_preds[[i]][j] < 3e-1)
+    lambdaval <- lasso$lambda[lambdainds]
+    pred2 <- predict(lasso, newx = x, type = "link", s = lambdaval)
+    solution_terms_lasso <- integer()
+    lasso_coefs <- as.matrix(lasso$beta[, tail(lambdainds, -1), drop = FALSE])
+    for (ii in seq_len(ncol(lasso_coefs))) {
+      solution_terms_lasso <- c(
+        solution_terms_lasso,
+        setdiff(which(lasso_coefs[, ii] > 0), solution_terms_lasso)
+      )
     }
+
+    # check that the predictions agree
+    pred1 <- unname(sapply(pred1, "[[", "pred"))
+    pred2 <- unname(pred2)
+    # Sometimes, glmnet terminates the coefficient path computation too early
+    # for some reason:
+    if (ncol(pred1) > ncol(pred2)) {
+      pred1 <- pred1[, seq_len(ncol(pred2)), drop = FALSE]
+    }
+    expect_equal(pred1, pred2, tolerance = 1e-2, info = as.character(i))
 
     # check that the coefficients are similar
     ind <- match(vs$solution_terms, setdiff(split_formula(formula), "1"))
-    if (Sys.getenv("NOT_CRAN") == "true") {
-      betas <- sapply(vs$search_path$submodls, function(x) x[[1]]$beta %||% 0)
-      delta <- sapply(seq_len(nterms), function(i) {
-        abs(t(betas[[i + 1]]) - lasso$beta[ind[1:i], lambdainds[i + 1]])
-      })
-      expect_true(median(unlist(delta)) < 6e-2)
-      expect_true(median(abs(sapply(vs$search_path$submodls, function(x) {
-        x[[1]]$alpha
-      }) - lasso$a0[lambdainds])) < 1.5e-1)
-    } else {
-      expect_true(sum(ind == solution_terms_lasso[[i]]) >= nterms / 2)
+    betas <- sapply(vs$search_path$submodls, function(x) x[[1]]$beta %||% 0)
+    delta <- sapply(seq_len(length(lambdainds) - 1), function(i) {
+      abs(t(betas[[i + 1]]) - lasso$beta[ind[1:i], lambdainds[i + 1]])
+    })
+    expect_true(median(unlist(delta)) < 6e-2)
+    expect_true(median(abs(
+      sapply(head(vs$search_path$submodls, length(lambdainds)),
+             function(x) {
+               x[[1]]$alpha
+             }) -
+        lasso$a0[lambdainds])
+    ) < 1.5e-1)
+    # Sometimes, glmnet terminates the coefficient path computation too early
+    # for some reason:
+    if (length(ind) > length(solution_terms_lasso)) {
+      ind <- ind[seq_along(solution_terms_lasso)]
     }
+    expect_identical(ind, solution_terms_lasso, info = as.character(i))
   }
-  RNGversion(paste(R.Version()$major, R.Version()$minor, sep = "."))
+  RNGversion(getRversion())
+  if (exists("rng_old")) assign(".Random.seed", rng_old, envir = .GlobalEnv)
 })

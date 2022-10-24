@@ -20,8 +20,11 @@ test_that(paste(
       refmod_expected = refmods[[tstsetup_ref]],
       solterms_len_expected = args_vs[[tstsetup]]$nterms_max,
       method_expected = meth_exp_crr,
-      nclusters_expected = args_vs[[tstsetup]]$nclusters,
-      nclusters_pred_expected = args_vs[[tstsetup]]$nclusters_pred,
+      nprjdraws_search_expected = args_vs[[tstsetup]]$nclusters,
+      nprjdraws_eval_expected = args_vs[[tstsetup]]$nclusters_pred,
+      search_trms_empty_size =
+        length(args_vs[[tstsetup]]$search_terms) &&
+        all(grepl("\\+", args_vs[[tstsetup]]$search_terms)),
       info_str = tstsetup
     )
   }
@@ -48,8 +51,6 @@ test_that("invalid `method` fails", {
 })
 
 test_that("`seed` works (and restores the RNG state afterwards)", {
-  # Note: Extensive tests for reproducibility may be found among the tests for
-  # .get_refdist().
   skip_if_not(run_vs)
   # To save time:
   tstsetups <- grep("\\.glm\\.gauss\\.", names(vss), value = TRUE)
@@ -57,37 +58,105 @@ test_that("`seed` works (and restores the RNG state afterwards)", {
     args_vs_i <- args_vs[[tstsetup]]
     vs_orig <- vss[[tstsetup]]
     rand_orig <- runif(1) # Just to advance `.Random.seed[2]`.
-    .Random.seed_new1 <- .Random.seed
-    vs_new <- do.call(varsel, c(
-      list(object = refmods[[args_vs_i$tstsetup_ref]],
-           seed = args_vs_i$seed + 1L),
-      excl_nonargs(args_vs_i, nms_excl_add = "seed")
-    ))
-    .Random.seed_new2 <- .Random.seed
-    rand_new <- runif(1) # Just to advance `.Random.seed[2]`.
     .Random.seed_repr1 <- .Random.seed
     vs_repr <- do.call(varsel, c(
       list(object = refmods[[args_vs_i$tstsetup_ref]]),
       excl_nonargs(args_vs_i)
     ))
     .Random.seed_repr2 <- .Random.seed
+    rand_new <- runif(1) # Just to advance `.Random.seed[2]`.
     # Expected equality:
     expect_equal(vs_repr, vs_orig, info = tstsetup)
-    expect_equal(.Random.seed_new2, .Random.seed_new1, info = tstsetup)
     expect_equal(.Random.seed_repr2, .Random.seed_repr1, info = tstsetup)
     # Expected inequality:
-    expect_false(isTRUE(all.equal(vs_new, vs_orig)), info = tstsetup)
     expect_false(isTRUE(all.equal(rand_new, rand_orig)), info = tstsetup)
-    expect_false(isTRUE(all.equal(.Random.seed_repr2, .Random.seed_new2)),
+  }
+})
+
+## d_test -----------------------------------------------------------------
+
+test_that(paste(
+  "`d_test` set to the training data gives the same results as its default"
+), {
+  skip_if_not(run_vs)
+  tstsetups <- names(vss)
+  for (tstsetup in tstsetups) {
+    args_vs_i <- args_vs[[tstsetup]]
+    tstsetup_ref <- args_vs_i$tstsetup_ref
+    pkg_crr <- args_vs_i$pkg_nm
+    mod_crr <- args_vs_i$mod_nm
+    fam_crr <- args_vs_i$fam_nm
+    if (!all(refmods[[tstsetup_ref]]$offset == 0)) {
+      offs_crr <- offs_tst
+    } else {
+      offs_crr <- rep(0, nobsv)
+    }
+    if (!all(refmods[[tstsetup_ref]]$wobs == 1)) {
+      wobs_crr <- wobs_tst
+    } else {
+      wobs_crr <- rep(1, nobsv)
+    }
+    formul_fit_crr <- args_fit[[args_vs_i$tstsetup_fit]]$formula
+    dat_crr <- get_dat_formul(formul_crr = formul_fit_crr,
+                              needs_adj = grepl("\\.spclformul", tstsetup))
+    d_test_crr <- list(
+      data = dat,
+      offset = offs_crr,
+      weights = wobs_crr,
+      y = dat_crr[[stdize_lhs(formul_fit_crr)$y_nm]]
+    )
+    vs_repr <- do.call(varsel, c(
+      list(object = refmods[[tstsetup_ref]], d_test = d_test_crr),
+      excl_nonargs(args_vs_i)
+    ))
+    meth_exp_crr <- args_vs_i$method
+    if (is.null(meth_exp_crr)) {
+      meth_exp_crr <- ifelse(mod_crr == "glm", "L1", "forward")
+    }
+    vsel_tester(
+      vs_repr,
+      refmod_expected = refmods[[tstsetup_ref]],
+      dtest_expected = c(list(type = "test"), d_test_crr),
+      solterms_len_expected = args_vs_i$nterms_max,
+      method_expected = meth_exp_crr,
+      nprjdraws_search_expected = args_vs_i$nclusters,
+      nprjdraws_eval_expected = args_vs_i$nclusters_pred,
+      search_trms_empty_size =
+        length(args_vs_i$search_terms) &&
+        all(grepl("\\+", args_vs_i$search_terms)),
+      info_str = tstsetup
+    )
+    expect_equal(vs_repr[setdiff(names(vs_repr), "d_test")],
+                 vss[[tstsetup]][setdiff(names(vss[[tstsetup]]), "d_test")],
+                 info = tstsetup)
+    expect_equal(vs_repr$d_test[setdiff(names(vs_repr$d_test),
+                                        c("type", "data"))],
+                 vss[[tstsetup]]$d_test[setdiff(names(vss[[tstsetup]]$d_test),
+                                                c("type", "data"))],
                  info = tstsetup)
   }
 })
 
-test_that("`d_test` works", {
+test_that(paste(
+  "`d_test` set to actual test data gives a `<vsel_object>$summaries$sub`",
+  "object that can be reproduced by proj_linpred() and a",
+  "`<vsel_object>$summaries$ref` object that can be reproduced by",
+  "posterior_epred() and log_lik()"
+), {
   skip_if_not(run_vs)
+  if (exists(".Random.seed", envir = .GlobalEnv)) {
+    rng_old <- get(".Random.seed", envir = .GlobalEnv)
+  }
   tstsetups <- names(vss)
-  ### Alternative with less test setups:
-  # tstsetups <- grep("\\.glm\\.", names(vss), value = TRUE)
+  ### TODO (GAMMs): Currently, the following test setups (can) lead to the error
+  ### ```
+  ### Error in t(as.matrix(b$reTrms$Zt[ii, ])) %*%
+  ### as.matrix(c(as.matrix(ranef[[i]]))) :
+  ###   non-conformable arguments
+  ### ```
+  ### thrown by predict.gamm4(). This needs to be fixed. For now, exclude these
+  ### test setups:
+  tstsetups <- grep("\\.gamm\\.", tstsetups, value = TRUE, invert = TRUE)
   ###
   for (tstsetup in tstsetups) {
     args_vs_i <- args_vs[[tstsetup]]
@@ -95,53 +164,123 @@ test_that("`d_test` works", {
     pkg_crr <- args_vs_i$pkg_nm
     mod_crr <- args_vs_i$mod_nm
     fam_crr <- args_vs_i$fam_nm
-    refmod_crr <- refmods[[tstsetup_ref]]
-    d_test_crr <- list(
-      y = refmod_crr$y,
-      test_points = seq_along(refmod_crr$y),
-      data = refmod_crr$fetch_data(),
-      weights = refmod_crr$wobs,
-      type = "test",
-      offset = refmod_crr$offset
-    )
-    # We expect a warning which in fact should be suppressed, though (see
-    # issue #162):
-    warn_expected <- if (pkg_crr == "rstanarm" &&
-                         mod_crr == "glm" &&
-                         grepl("\\.with_offs", tstsetup)) {
-      paste("^'offset' argument is NULL but it looks like you estimated the",
-            "model using an offset term\\.$")
+    if (!all(refmods[[tstsetup_ref]]$offset == 0)) {
+      offs_crr <- offs_indep
     } else {
-      NA
+      offs_crr <- rep(0, nobsv_indep)
     }
-    expect_warning(
-      vs_repr <- do.call(varsel, c(
-        list(object = refmod_crr, d_test = d_test_crr),
-        excl_nonargs(args_vs_i)
-      )),
-      warn_expected,
-      info = tstsetup
+    if (!all(refmods[[tstsetup_ref]]$wobs == 1)) {
+      wobs_crr <- wobs_indep
+    } else {
+      wobs_crr <- rep(1, nobsv_indep)
+    }
+    formul_fit_crr <- args_fit[[args_vs_i$tstsetup_fit]]$formula
+    dat_indep_crr <- get_dat_formul(
+      formul_crr = formul_fit_crr,
+      needs_adj = grepl("\\.spclformul", tstsetup),
+      dat_crr = dat_indep
     )
+    d_test_crr <- list(
+      data = dat_indep,
+      offset = offs_crr,
+      weights = wobs_crr,
+      y = dat_indep_crr[[stdize_lhs(formul_fit_crr)$y_nm]]
+    )
+    vs_indep <- do.call(varsel, c(
+      list(object = refmods[[tstsetup_ref]], d_test = d_test_crr),
+      excl_nonargs(args_vs_i)
+    ))
     meth_exp_crr <- args_vs_i$method
     if (is.null(meth_exp_crr)) {
       meth_exp_crr <- ifelse(mod_crr == "glm", "L1", "forward")
     }
     vsel_tester(
-      vs_repr,
-      refmod_expected = refmod_crr,
-      dtest_expected = d_test_crr,
+      vs_indep,
+      refmod_expected = refmods[[tstsetup_ref]],
+      dtest_expected = c(list(type = "test"), d_test_crr),
       solterms_len_expected = args_vs_i$nterms_max,
       method_expected = meth_exp_crr,
-      nclusters_expected = args_vs_i$nclusters,
-      nclusters_pred_expected = args_vs_i$nclusters_pred,
+      nprjdraws_search_expected = args_vs_i$nclusters,
+      nprjdraws_eval_expected = args_vs_i$nclusters_pred,
+      search_trms_empty_size =
+        length(args_vs_i$search_terms) &&
+        all(grepl("\\+", args_vs_i$search_terms)),
       info_str = tstsetup
     )
-    expect_identical(vs_repr$d_test, d_test_crr, info = tstsetup)
-    expect_equal(vs_repr[setdiff(names(vs_repr), vsel_nms_dtest)],
-                 vss[[tstsetup]][setdiff(names(vss[[tstsetup]]),
-                                         vsel_nms_dtest)],
-                 info = tstsetup)
+
+    ### Summaries for the submodels -------------------------------------------
+
+    # For getting the correct seed in proj_linpred():
+    set.seed(args_vs_i$seed)
+    p_sel_dummy <- .get_refdist(refmods[[tstsetup_ref]],
+                                nclusters = vs_indep$nprjdraws_search)
+    # As soon as GitHub issues #168 and #211 are fixed, we can use `refit_prj =
+    # FALSE` here:
+    pl_indep <- proj_linpred(vs_indep,
+                             newdata = dat_indep_crr,
+                             offsetnew = d_test_crr$offset,
+                             weightsnew = d_test_crr$weights,
+                             transform = TRUE,
+                             integrated = TRUE,
+                             .seed = NA,
+                             nterms = c(0L, seq_along(vs_indep$solution_terms)),
+                             nclusters = args_vs_i$nclusters_pred,
+                             seed = NA)
+    summ_sub_ch <- lapply(pl_indep, function(pl_indep_k) {
+      names(pl_indep_k)[names(pl_indep_k) == "pred"] <- "mu"
+      names(pl_indep_k)[names(pl_indep_k) == "lpd"] <- "lppd"
+      pl_indep_k$mu <- unname(drop(pl_indep_k$mu))
+      pl_indep_k$lppd <- drop(pl_indep_k$lppd)
+      return(pl_indep_k)
+    })
+    names(summ_sub_ch) <- NULL
+    expect_equal(vs_indep$summaries$sub, summ_sub_ch,
+                 tolerance = .Machine$double.eps, info = tstsetup)
+
+    ### Summaries for the reference model -------------------------------------
+
+    if (pkg_crr == "rstanarm") {
+      mu_new <- rstantools::posterior_epred(refmods[[tstsetup_ref]]$fit,
+                                            newdata = dat_indep,
+                                            offset = d_test_crr$offset)
+      if (grepl("\\.without_wobs", tstsetup)) {
+        lppd_new <- rstantools::log_lik(refmods[[tstsetup_ref]]$fit,
+                                        newdata = dat_indep,
+                                        offset = d_test_crr$offset)
+      } else {
+        ### Currently, rstanarm issue #567 causes an error to be thrown when
+        ### calling log_lik(). Therefore, use the following dummy which
+        ### guarantees test success:
+        lppd_new <- matrix(vs_indep$summaries$ref$lppd,
+                           nrow = nrefdraws, ncol = nobsv_indep, byrow = TRUE)
+        ###
+      }
+    } else if (pkg_crr == "brms") {
+      mu_new <- rstantools::posterior_epred(refmods[[tstsetup_ref]]$fit,
+                                            newdata = dat_indep)
+      if (fam_crr == "binom") {
+        # Compared to rstanarm, brms uses a different convention for the
+        # binomial family: The values returned by posterior_epred() are not
+        # probabilities, but the expected values on the scale of the response
+        # (so the probabilities multiplied by the number of trials). Thus, we
+        # have to revert this here:
+        mu_new <- mu_new / matrix(wobs_indep, nrow = nrow(mu_new),
+                                  ncol = ncol(mu_new), byrow = TRUE)
+      }
+      lppd_new <- rstantools::log_lik(refmods[[tstsetup_ref]]$fit,
+                                      newdata = dat_indep)
+    }
+    summ_ref_ch <- list(
+      mu = unname(colMeans(mu_new)),
+      lppd = unname(apply(lppd_new, 2, log_sum_exp) - log(nrefdraws))
+    )
+    expect_equal(vs_indep$summaries$ref, summ_ref_ch,
+                 tolerance = 1e3 * .Machine$double.eps, info = tstsetup)
+    lppd_ref_ch2 <- unname(loo::elpd(lppd_new)$pointwise[, "elpd"])
+    expect_equal(vs_indep$summaries$ref$lppd, lppd_ref_ch2,
+                 tolerance = 1e2 * .Machine$double.eps, info = tstsetup)
   }
+  if (exists("rng_old")) assign(".Random.seed", rng_old, envir = .GlobalEnv)
 })
 
 ## Regularization ---------------------------------------------------------
@@ -180,8 +319,8 @@ test_that(paste(
           refmod_expected = refmods[[args_vs_i$tstsetup_ref]],
           solterms_len_expected = args_vs_i$nterms_max,
           method_expected = "L1",
-          nclusters_expected = args_vs_i$nclusters,
-          nclusters_pred_expected = args_vs_i$nclusters_pred,
+          nprjdraws_search_expected = args_vs_i$nclusters,
+          nprjdraws_eval_expected = args_vs_i$nclusters_pred,
           info_str = tstsetup
         )
         # Expect equality for all components not related to prediction:
@@ -241,16 +380,13 @@ test_that(paste(
   for (tstsetup in tstsetups) {
     args_vs_i <- args_vs[[tstsetup]]
     m_max <- args_vs_i$nterms_max + 1L
-    if (identical(args_vs_i$method, "forward")) {
-      ncl_crr <- args_vs_i$nclusters
-    } else {
-      ncl_crr <- 1L
+    if (length(args_vs_i$search_terms) &&
+        all(grepl("\\+", args_vs_i$search_terms))) {
+      # This is the "empty_size" setting, so we have to subtract the skipped
+      # model size (see issue #307):
+      m_max <- m_max - 1L
     }
-    if (!grepl("\\.spclformul", tstsetup)) {
-      tol_alpha <- 3e-1
-    } else {
-      tol_alpha <- 5e-1
-    }
+    ncl_crr <- args_vs_i$nclusters
     ssq_regul_sel_alpha <- array(dim = c(length(regul_tst), m_max, ncl_crr))
     ssq_regul_sel_beta <- array(dim = c(length(regul_tst), m_max, ncl_crr))
     ssq_regul_prd <- array(dim = c(length(regul_tst), m_max))
@@ -268,8 +404,11 @@ test_that(paste(
           refmod_expected = refmods[[args_vs_i$tstsetup_ref]],
           solterms_len_expected = args_vs_i$nterms_max,
           method_expected = "forward",
-          nclusters_expected = args_vs_i$nclusters,
-          nclusters_pred_expected = args_vs_i$nclusters_pred,
+          nprjdraws_search_expected = args_vs_i$nclusters,
+          nprjdraws_eval_expected = args_vs_i$nclusters_pred,
+          search_trms_empty_size =
+            length(args_vs_i$search_terms) &&
+            all(grepl("\\+", args_vs_i$search_terms)),
           info_str = tstsetup
         )
       }
@@ -310,19 +449,9 @@ test_that(paste(
     for (nn in seq_len(dim(ssq_regul_sel_alpha)[3])) {
       expect_length(unique(ssq_regul_sel_alpha[, 1, !!nn]), 1)
     }
-    # All other (i.e., not intercept-only) models:
-    for (j in seq_len(dim(ssq_regul_sel_alpha)[1])[-1]) {
-      for (m in seq_len(dim(ssq_regul_sel_alpha)[2])[-1]) {
-        for (nn in seq_len(dim(ssq_regul_sel_alpha)[3])) {
-          expect_equal(ssq_regul_sel_alpha[!!j, !!m, !!nn],
-                       ssq_regul_sel_alpha[j - 1, m, nn],
-                       tolerance = tol_alpha)
-        }
-      }
-    }
-    # For the intercept-only model:
     expect_true(all(is.na(ssq_regul_sel_beta[, 1, ])), info = tstsetup)
-    # All other (i.e., not intercept-only) models:
+    # All other (i.e., not intercept-only) models (note: as discussed at issue
+    # #169, the intercept is not tested here to stay the same):
     ssq_regul_sel_beta_cond <- array(
       dim = dim(ssq_regul_sel_beta) + c(-1L, -1L, 0L)
     )
@@ -417,8 +546,10 @@ test_that("for L1 search, `penalty` has an expected effect", {
     idx_penal_Inf <- c(3) # One variable with infinite penalty.
     penal_crr[idx_penal_0] <- 0
     penal_crr[idx_penal_Inf] <- Inf
-    # Note: This test probably needs to be adapted properly to categorical
-    # predictors. As a workaround, perform the following check:
+    # TODO: This test should be extended to also test the case where a
+    # categorical predictor (more precisely, one of its dummy variables) gets
+    # zero or infinite penalty. For now, the following check ensures that no
+    # categorical predictors get zero or infinite penalty:
     stopifnot(all(grep("^xca\\.", penal_possbl) >= max(c(idx_penal_0,
                                                          idx_penal_Inf))))
 
@@ -433,8 +564,8 @@ test_that("for L1 search, `penalty` has an expected effect", {
       refmod_expected = refmods[[args_vs_i$tstsetup_ref]],
       solterms_len_expected = nterms_max_crr,
       method_expected = "L1",
-      nclusters_expected = args_vs_i$nclusters,
-      nclusters_pred_expected = args_vs_i$nclusters_pred,
+      nprjdraws_search_expected = args_vs_i$nclusters,
+      nprjdraws_eval_expected = args_vs_i$nclusters_pred,
       info_str = tstsetup
     )
     # Check that the variables with no cost are selected first and the ones
@@ -446,6 +577,61 @@ test_that("for L1 search, `penalty` has an expected effect", {
     expect_identical(rev(solterms_penal)[seq_along(idx_penal_Inf)],
                      rev(penal_possbl[idx_penal_Inf]),
                      info = tstsetup)
+  }
+})
+
+## search_terms -----------------------------------------------------------
+
+test_that(paste(
+  "including all terms in `search_terms` gives the same results as the default",
+  "`search_terms`"
+), {
+  skip_if_not(run_vs)
+  tstsetups <- grep("\\.alltrms", names(vss), value = TRUE)
+  for (tstsetup in tstsetups) {
+    tstsetup_default <- sub("\\.alltrms", "\\.default_search_trms", tstsetup)
+    if (!tstsetup_default %in% names(vss)) next
+    expect_identical(vss[[tstsetup]], vss[[tstsetup_default]], info = tstsetup)
+  }
+})
+
+test_that(paste(
+  "forcing the inclusion of a term in the candidate models via `search_terms`",
+  "works as expected"
+), {
+  skip_if_not(run_vs)
+  tstsetups <- grep("\\.fixed", names(vss), value = TRUE)
+  for (tstsetup in tstsetups) {
+    # In principle, `search_trms_tst$fixed$search_terms[1]` could be used
+    # instead of `"xco.1"`, but that would seem like the forced term always has
+    # to come first in `search_terms` (which is not the case):
+    expect_identical(solution_terms(vss[[tstsetup]])[1], "xco.1",
+                     info = tstsetup)
+  }
+})
+
+test_that(paste(
+  "forcing the exclusion of a term in the candidate models via `search_terms`",
+  "works as expected"
+), {
+  skip_if_not(run_vs)
+  tstsetups <- grep("\\.excluded", names(vss), value = TRUE)
+  for (tstsetup in tstsetups) {
+    expect_false("xco.1" %in% solution_terms(vss[[tstsetup]]), info = tstsetup)
+  }
+})
+
+test_that(paste(
+  "forcing the skipping of a model size via `search_terms` works as expected"
+), {
+  skip_if_not(run_vs)
+  tstsetups <- grep("\\.empty_size", names(vss), value = TRUE)
+  for (tstsetup in tstsetups) {
+    soltrms_out <- solution_terms(vss[[tstsetup]])
+    expect_true(
+      grepl("\\+", soltrms_out[1]) && !any(grepl("\\+", soltrms_out[-1])),
+      info = tstsetup
+    )
   }
 })
 
@@ -473,8 +659,11 @@ test_that(paste(
       method_expected = meth_exp_crr,
       cv_method_expected = args_cvvs[[tstsetup]]$cv_method,
       valsearch_expected = args_cvvs[[tstsetup]]$validate_search,
-      nclusters_expected = args_cvvs[[tstsetup]]$nclusters,
-      nclusters_pred_expected = args_cvvs[[tstsetup]]$nclusters_pred,
+      nprjdraws_search_expected = args_cvvs[[tstsetup]]$nclusters,
+      nprjdraws_eval_expected = args_cvvs[[tstsetup]]$nclusters_pred,
+      search_trms_empty_size =
+        length(args_cvvs[[tstsetup]]$search_terms) &&
+        all(grepl("\\+", args_cvvs[[tstsetup]]$search_terms)),
       info_str = tstsetup
     )
   }
@@ -509,44 +698,35 @@ test_that("invalid `cv_method` fails", {
 })
 
 test_that("`seed` works (and restores the RNG state afterwards)", {
-  # Note: Extensive tests for reproducibility may be found among the tests for
-  # .get_refdist().
   skip_if_not(run_cvvs)
   # To save time:
-  tstsetups <- grep("\\.glm\\.gauss", names(cvvss), value = TRUE)
+  tstsetups <- union(
+    grep("\\.glm\\.gauss", names(cvvss), value = TRUE),
+    # Important for testing get_refmodel.brmsfit()'s internal `kfold_seed` (and
+    # also `refprd_seed` if we are lucky and get a fold which separates out at
+    # least one group):
+    grep("^brms\\.(glmm|gamm)\\..*\\.kfold", names(cvvss), value = TRUE)
+  )
   for (tstsetup in tstsetups) {
     args_cvvs_i <- args_cvvs[[tstsetup]]
     cvvs_orig <- cvvss[[tstsetup]]
     rand_orig <- runif(1) # Just to advance `.Random.seed[2]`.
-    .Random.seed_new1 <- .Random.seed
-    # Use suppressWarnings() because of occasional warnings concerning Pareto k
-    # diagnostics:
-    cvvs_new <- suppressWarnings(do.call(cv_varsel, c(
-      list(object = refmods[[args_cvvs_i$tstsetup_ref]],
-           seed = args_cvvs_i$seed + 1L),
-      excl_nonargs(args_cvvs_i, nms_excl_add = "seed")
-    )))
-    .Random.seed_new2 <- .Random.seed
-    rand_new <- runif(1) # Just to advance `.Random.seed[2]`.
     .Random.seed_repr1 <- .Random.seed
     cvvs_repr <- suppressWarnings(do.call(cv_varsel, c(
       list(object = refmods[[args_cvvs_i$tstsetup_ref]]),
       excl_nonargs(args_cvvs_i)
     )))
     .Random.seed_repr2 <- .Random.seed
+    rand_new <- runif(1) # Just to advance `.Random.seed[2]`.
     # Expected equality:
     expect_equal(cvvs_repr, cvvs_orig, info = tstsetup)
-    if (!identical(args_cvvs_i$cv_method, "kfold")) {
-      expect_equal(.Random.seed_new2, .Random.seed_new1, info = tstsetup)
-      expect_equal(.Random.seed_repr2, .Random.seed_repr1, info = tstsetup)
-    }
+    expect_equal(.Random.seed_repr2, .Random.seed_repr1, info = tstsetup)
     # Expected inequality:
-    expect_false(isTRUE(all.equal(cvvs_new, cvvs_orig)), info = tstsetup)
     expect_false(isTRUE(all.equal(rand_new, rand_orig)), info = tstsetup)
-    expect_false(isTRUE(all.equal(.Random.seed_repr2, .Random.seed_new2)),
-                 info = tstsetup)
   }
 })
+
+## nloo -------------------------------------------------------------------
 
 test_that("invalid `nloo` fails", {
   for (tstsetup in names(refmods)) {
@@ -581,7 +761,7 @@ test_that(paste(
 
 test_that("setting `nloo` smaller than the number of observations works", {
   skip_if_not(run_cvvs)
-  nloo_tst <- nobsv - 1L
+  nloo_tst <- nobsv %/% 5L
   tstsetups <- grep("\\.glm\\.gauss\\..*\\.default_cvmeth", names(cvvss),
                     value = TRUE)
   for (tstsetup in tstsetups) {
@@ -609,9 +789,12 @@ test_that("setting `nloo` smaller than the number of observations works", {
       method_expected = meth_exp_crr,
       cv_method_expected = "LOO",
       valsearch_expected = args_cvvs_i$validate_search,
-      nclusters_expected = args_cvvs_i$nclusters,
-      nclusters_pred_expected = args_cvvs_i$nclusters_pred,
+      nprjdraws_search_expected = args_cvvs_i$nclusters,
+      nprjdraws_eval_expected = args_cvvs_i$nclusters_pred,
       nloo_expected = nloo_tst,
+      search_trms_empty_size =
+        length(args_cvvs_i$search_terms) &&
+        all(grepl("\\+", args_cvvs_i$search_terms)),
       info_str = tstsetup
     )
     # Expected equality for most components with a few exceptions:
@@ -628,12 +811,14 @@ test_that("setting `nloo` smaller than the number of observations works", {
   }
 })
 
+## validate_search --------------------------------------------------------
+
 test_that("`validate_search` works", {
   skip_if_not(run_cvvs)
   tstsetups <- grep("\\.default_cvmeth", names(cvvss), value = TRUE)
   if (!run_valsearch_always) {
     tstsetups <- grep("\\.glm\\.", tstsetups, value = TRUE)
-    tstsetups <- grep("\\.forward", tstsetups, value = TRUE, invert = TRUE)
+    tstsetups <- grep("\\.forward\\.", tstsetups, value = TRUE, invert = TRUE)
   }
   suggsize_cond <- setNames(rep(NA, length(tstsetups)), nm = tstsetups)
   for (tstsetup in tstsetups) {
@@ -662,8 +847,11 @@ test_that("`validate_search` works", {
       method_expected = meth_exp_crr,
       cv_method_expected = "LOO",
       valsearch_expected = FALSE,
-      nclusters_expected = args_cvvs_i$nclusters,
-      nclusters_pred_expected = args_cvvs_i$nclusters_pred,
+      nprjdraws_search_expected = args_cvvs_i$nclusters,
+      nprjdraws_eval_expected = args_cvvs_i$nclusters_pred,
+      search_trms_empty_size =
+        length(args_cvvs_i$search_terms) &&
+        all(grepl("\\+", args_cvvs_i$search_terms)),
       info_str = tstsetup
     )
     # Expected equality for most components with a few exceptions:
@@ -676,6 +864,18 @@ test_that("`validate_search` works", {
     # Expected inequality for the exceptions (but note that the components from
     # `vsel_nms_cv_valsearch_opt` can be, but don't need to be differing):
     for (vsel_nm in setdiff(vsel_nms_cv_valsearch, vsel_nms_cv_valsearch_opt)) {
+      if (vsel_nm == "pct_solution_terms_cv" &&
+          all(cvvss[[tstsetup]][[vsel_nm]][
+            , colnames(cvvss[[tstsetup]][[vsel_nm]]) != "size", drop = FALSE
+          ] %in% c(0, 1))) {
+        # In this case, a comparison will most likely give the same
+        # `pct_solution_terms_cv` element for `validate_search = TRUE` and
+        # `validate_search = FALSE`. In fact, `pct_solution_terms_cv` could
+        # therefore be added to `vsel_nms_cv_valsearch_opt`, but most of the
+        # time, `pct_solution_terms_cv` will differ, so we don't include it in
+        # `vsel_nms_cv_valsearch_opt` and skip here:
+        next
+      }
       expect_false(isTRUE(all.equal(cvvs_valsearch[[vsel_nm]],
                                     cvvss[[tstsetup]][[vsel_nm]])),
                    info = paste(tstsetup, vsel_nm, sep = "__"))
@@ -708,6 +908,8 @@ test_that("`validate_search` works", {
   expect_true(sum(!suggsize_cond, na.rm = TRUE) <= sum_as_unexpected)
 })
 
+## Arguments specific to K-fold CV ----------------------------------------
+
 test_that("invalid `K` fails", {
   expect_error(cv_varsel(refmods[[1]], cv_method = "kfold", K = 1),
                "^`K` must be at least 2\\.$")
@@ -721,11 +923,18 @@ test_that("invalid `K` fails", {
                "^`K` must be a single integer value\\.$")
 })
 
-test_that("`cvfits` (actually passed to init_refmodel()) works", {
+test_that(paste(
+  "`cvfits` (actually passed to init_refmodel()) works for rstanarm reference",
+  "models"
+), {
   skip_if_not(run_cvvs)
-  tstsetups <- grep("^rstanarm.*\\.kfold", names(cvvss), value = TRUE)
+  tstsetups <- grep("^rstanarm\\..*\\.kfold", names(cvvss), value = TRUE)
   if (!run_cvfits_all) {
-    tstsetups <- head(tstsetups, 1)
+    tstsetups_tmp <- head(grep("\\.glmm\\.", tstsetups, value = TRUE), 1)
+    if (length(tstsetups_tmp) == 0) {
+      tstsetups_tmp <- head(tstsetups, 1)
+    }
+    tstsetups <- tstsetups_tmp
   }
   for (tstsetup in tstsetups) {
     args_cvvs_i <- args_cvvs[[tstsetup]]
@@ -739,51 +948,47 @@ test_that("`cvfits` (actually passed to init_refmodel()) works", {
     fit_crr <- fits[[tstsetup_fit]]
     K_crr <- args_cvvs_i$K
 
-    # Refit `K_crr` times:
-    # rstanarm::kfold() lacks an argument for setting the seed:
-    set.seed(seed_fit)
+    # Refit `K_crr` times (note: below, the seed for constructing `folds_vec`
+    # had to be changed in some cases to avoid unfavorable PRNG situations,
+    # leading to technical issues such as nonconvergence of the submodel fitter;
+    # this is also tied to the value of `seed_tst`):
+    if (grepl("\\.glmm\\.", tstsetup)) {
+      # Perform a grouped K-fold CV to test an edge case where all observations
+      # belonging to the same level of a variable with group-level effects are
+      # in the same fold, so prediction is performed for new levels (see, e.g.,
+      # brms's GitHub issue #1286):
+      if (exists(".Random.seed", envir = .GlobalEnv)) {
+        rng_old <- get(".Random.seed", envir = .GlobalEnv)
+      }
+      # Make the construction of the CV folds reproducible:
+      set.seed(seed2_tst * 3L)
+      folds_vec <- loo::kfold_split_grouped(K = K_crr, x = dat$z.1)
+      if (exists("rng_old")) assign(".Random.seed", rng_old, envir = .GlobalEnv)
+    } else {
+      folds_vec <- cvfolds(nobsv, K = K_crr, seed = seed2_tst)
+    }
     # Additionally to suppressWarnings(), suppressMessages() could be used here
     # (but is not necessary since messages seem to be suppressed within
     # test_that()'s `code`):
     kfold_obj <- suppressWarnings(
-      rstanarm::kfold(fit_crr, K = K_crr, save_fits = TRUE)
+      kfold(fit_crr,
+            K = K_crr,
+            folds = folds_vec,
+            save_fits = TRUE,
+            cores = 1)
     )
-
-    # Create the folds vector:
-    folds_vec <- rep(NA, nobsv)
-    for (k_crr in seq_len(K_crr)) {
-      idcs_fold <- kfold_obj$fits[, "omitted"][[k_crr]]
-      stopifnot(identical(
-        idcs_fold,
-        setdiff(seq_len(nobsv),
-                as.integer(rownames(kfold_obj$fits[, "fit"][[k_crr]]$data)))
-      ))
-      folds_vec[idcs_fold] <- k_crr
-    }
-    stopifnot(all(!is.na(folds_vec)))
-    attr(kfold_obj, "folds") <- folds_vec
+    kfold_obj <- structure(list(fits = kfold_obj$fits[, "fit"]),
+                           K = K_crr,
+                           folds = folds_vec)
 
     # Create `"refmodel"` object with `cvfits`:
     refmod_crr <- get_refmodel(fit_crr, cvfits = kfold_obj)
 
     # Run cv_varsel():
-    # We expect a warning which in fact should be suppressed, though (see
-    # issue #162):
-    warn_expected <- if (mod_crr == "glm" &&
-                         grepl("\\.with_offs", tstsetup)) {
-      paste("^'offset' argument is NULL but it looks like you estimated the",
-            "model using an offset term\\.$")
-    } else {
-      NA
-    }
-    expect_warning(
-      cvvs_cvfits <- do.call(cv_varsel, c(
-        list(object = refmod_crr),
-        excl_nonargs(args_cvvs_i, nms_excl_add = "K")
-      )),
-      warn_expected,
-      info = tstsetup
-    )
+    cvvs_cvfits <- do.call(cv_varsel, c(
+      list(object = refmod_crr),
+      excl_nonargs(args_cvvs_i, nms_excl_add = "K")
+    ))
 
     # Checks:
     vsel_tester(
@@ -794,14 +999,124 @@ test_that("`cvfits` (actually passed to init_refmodel()) works", {
       method_expected = meth_exp_crr,
       cv_method_expected = "kfold",
       valsearch_expected = args_cvvs_i$validate_search,
-      nclusters_expected = args_cvvs_i$nclusters,
-      nclusters_pred_expected = args_cvvs_i$nclusters_pred,
+      nprjdraws_search_expected = args_cvvs_i$nclusters,
+      nprjdraws_eval_expected = args_cvvs_i$nclusters_pred,
+      search_trms_empty_size =
+        length(args_cvvs_i$search_terms) &&
+        all(grepl("\\+", args_cvvs_i$search_terms)),
       info_str = tstsetup
     )
-    # Note: Unfortunately, it is currently not possible to always ensure exactly
-    # the same seed when performing K-fold CV with `cvfits` or without `cvfits`.
-    # Therefore, the following checks for equality/inequality are quite
-    # restricted.
+    # Expected equality for some components:
+    # TODO: Currently, `check.environment = FALSE` is needed. The reason is
+    # probably that in the divergence minimizers, the projpred-extended family
+    # is passed to argument `family` of the external model fitting functions
+    # like lme4::glmer(). This should be fixed and then `check.environment =
+    # FALSE` should be removed.
+    expect_equal(cvvs_cvfits[setdiff(vsel_nms_cv, vsel_nms_cv_cvfits)],
+                 cvvss[[tstsetup]][setdiff(vsel_nms_cv, vsel_nms_cv_cvfits)],
+                 check.environment = FALSE,
+                 info = tstsetup)
+    # Expected inequality for the remaining components (but note that the
+    # components from `vsel_nms_cv_cvfits_opt` can be, but don't need to be
+    # differing):
+    for (vsel_nm in setdiff(vsel_nms_cv_cvfits, vsel_nms_cv_cvfits_opt)) {
+      expect_false(isTRUE(all.equal(cvvs_cvfits[[vsel_nm]],
+                                    cvvss[[tstsetup]][[vsel_nm]])),
+                   info = paste(tstsetup, vsel_nm, sep = "__"))
+    }
+  }
+})
+
+test_that(paste(
+  "`cvfits` (actually passed to init_refmodel()) works for brms reference",
+  "models"
+), {
+  skip_if_not(run_cvvs)
+  skip_if_not(packageVersion("brms") >= "2.16.4")
+  tstsetups <- grep("^brms\\..*\\.kfold", names(cvvss), value = TRUE)
+  if (!run_cvfits_all) {
+    tstsetups_tmp <- head(grep("\\.glmm\\.", tstsetups, value = TRUE), 1)
+    if (length(tstsetups_tmp) == 0) {
+      tstsetups_tmp <- head(tstsetups, 1)
+    }
+    tstsetups <- tstsetups_tmp
+  }
+  for (tstsetup in tstsetups) {
+    args_cvvs_i <- args_cvvs[[tstsetup]]
+    tstsetup_fit <- args_cvvs_i$tstsetup_fit
+    mod_crr <- args_cvvs_i$mod_nm
+    fam_crr <- args_cvvs_i$fam_nm
+    meth_exp_crr <- args_cvvs_i$method
+    if (is.null(meth_exp_crr)) {
+      meth_exp_crr <- ifelse(mod_crr == "glm", "L1", "forward")
+    }
+    fit_crr <- fits[[tstsetup_fit]]
+    K_crr <- args_cvvs_i$K
+
+    # Refit `K_crr` times (note: below, the seed for constructing `folds_vec`
+    # had to be changed in some cases to avoid unfavorable PRNG situations,
+    # leading to technical issues such as nonconvergence of the submodel fitter;
+    # this is also tied to the value of `seed_tst`):
+    if (grepl("\\.glmm\\.", tstsetup)) {
+      # Perform a grouped K-fold CV to test an edge case where all observations
+      # belonging to the same level of a variable with group-level effects are
+      # in the same fold, so prediction is performed for new levels (see, e.g.,
+      # brms's GitHub issue #1286):
+      if (exists(".Random.seed", envir = .GlobalEnv)) {
+        rng_old <- get(".Random.seed", envir = .GlobalEnv)
+      }
+      # Make the construction of the CV folds reproducible:
+      set.seed(seed2_tst + 10L)
+      folds_vec <- loo::kfold_split_grouped(K = K_crr, x = dat$z.1)
+      if (exists("rng_old")) assign(".Random.seed", rng_old, envir = .GlobalEnv)
+    } else if (grepl("\\.gam\\.", tstsetup)) {
+      folds_vec <- cvfolds(nobsv, K = K_crr, seed = seed2_tst + 10L)
+    } else {
+      folds_vec <- cvfolds(nobsv, K = K_crr, seed = seed2_tst)
+    }
+    kfold_obj <- kfold(fit_crr,
+                       K = K_crr,
+                       folds = folds_vec,
+                       save_fits = TRUE,
+                       seed = seed_fit)
+    kfold_obj <- structure(list(fits = kfold_obj$fits[, "fit"]),
+                           K = K_crr,
+                           folds = folds_vec)
+
+    # Create `"refmodel"` object with `cvfits`:
+    refmod_crr <- get_refmodel(fit_crr, brms_seed = seed2_tst,
+                               cvfits = kfold_obj)
+
+    # Run cv_varsel():
+    cvvs_cvfits <- do.call(cv_varsel, c(
+      list(object = refmod_crr),
+      excl_nonargs(args_cvvs_i, nms_excl_add = "K")
+    ))
+    # Test the reproducibility of ref_predfun() when applied to new observations
+    # (should be ensured by get_refmodel.brmsfit()'s internal `refprd_seed`):
+    runif(1)
+    cvvs_cvfits_repr <- do.call(cv_varsel, c(
+      list(object = refmod_crr),
+      excl_nonargs(args_cvvs_i, nms_excl_add = "K")
+    ))
+
+    # Checks:
+    expect_equal(cvvs_cvfits, cvvs_cvfits_repr, info = tstsetup)
+    vsel_tester(
+      cvvs_cvfits,
+      with_cv = TRUE,
+      refmod_expected = refmod_crr,
+      solterms_len_expected = args_cvvs_i$nterms_max,
+      method_expected = meth_exp_crr,
+      cv_method_expected = "kfold",
+      valsearch_expected = args_cvvs_i$validate_search,
+      nprjdraws_search_expected = args_cvvs_i$nclusters,
+      nprjdraws_eval_expected = args_cvvs_i$nclusters_pred,
+      search_trms_empty_size =
+        length(args_cvvs_i$search_terms) &&
+        all(grepl("\\+", args_cvvs_i$search_terms)),
+      info_str = tstsetup
+    )
     # Expected equality for some components:
     # TODO: Currently, `check.environment = FALSE` is needed. The reason is
     # probably that in the divergence minimizers, the projpred-extended family

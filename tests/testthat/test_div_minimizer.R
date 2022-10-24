@@ -1,7 +1,7 @@
 context("div_minimizer")
 
-test_that("all div_minimizer()s work", {
-  divmin_fun <- "divmin"
+test_that("divmin() works", {
+  skip_on_cran()
   for (tstsetup in names(fits)) {
     args_fit_i <- args_fit[[tstsetup]]
     pkg_crr <- args_fit_i$pkg_nm
@@ -14,12 +14,12 @@ test_that("all div_minimizer()s work", {
       var_crr <- mean(as.matrix(fits[[tstsetup]])[, "sigma"]^2) +
         (colMeans(mu_crr^2) - colMeans(mu_crr)^2)
     } else {
-      var_crr <- rep(0, nobsv)
+      var_crr <- rep(NA, nobsv)
     }
     args_fit_i$projpred_var <- matrix(var_crr)
     args_fit_i$projpred_regul <- regul_default
 
-    if (args_fit_i$pkg_nm == "brms" && grepl("\\.with_wobs", tstsetup)) {
+    if (pkg_crr == "brms" && grepl("\\.with_wobs", tstsetup)) {
       args_fit_i$formula <- rm_addresp(args_fit_i$formula)
       args_fit_i$weights <- eval(args_fit_i$data)$wobs_col
     }
@@ -51,7 +51,7 @@ test_that("all div_minimizer()s work", {
     }
 
     divmin_res <- do.call(
-      divmin_fun,
+      divmin,
       args_fit_i[intersect(c("formula", "data", "family", "weights",
                              "projpred_var", "projpred_regul"),
                            names(args_fit_i))]

@@ -1,6 +1,6 @@
 # Family-specific helper functions
 #
-# `extend_family(family)` returns a [`family`] object augmented with auxiliary
+# `extend_family(family)` returns a `family` object augmented with auxiliary
 # functions that are needed for computing KL-divergence, log predictive density,
 # dispersion projection, etc.
 #
@@ -9,18 +9,18 @@
 
 #' Extend a family
 #'
-#' This function adds some internally required elements to a [`family`] object.
-#' It is called internally by [init_refmodel()], so you will rarely need to call
-#' it yourself.
+#' This function adds some internally required elements to an object of class
+#' `family` (see, e.g., [family()]). It is called internally by
+#' [init_refmodel()], so you will rarely need to call it yourself.
 #'
-#' @param family A [`family`] object.
+#' @param family An object of class `family`.
 #'
-#' @return The [`family`] object extended in the way needed by \pkg{projpred}.
+#' @return The `family` object extended in the way needed by \pkg{projpred}.
 #'
 #' @export
 extend_family <- function(family) {
   if (.has_family_extras(family)) {
-    ## if the object already was created using this function, then return
+    # If the family was already extended using this function, then return as-is:
     return(family)
   }
   extend_family_specific <- paste0("extend_family_", tolower(family$family))
@@ -199,7 +199,7 @@ extend_family_gamma <- function(family) {
     ##     lgamma(p_sub$dis) + pref$mu*p_sub$dis/p_sub$mu - pref$dis))
   }
   dis_gamma <- function(pref, psub, wobs = 1) {
-    ## TODO, IMPLEMENT THIS
+    ## TODO (Gamma()), IMPLEMENT THIS
     stop("Projection of dispersion parameter not yet implemented for family",
          " Gamma.")
     ## mean(wobs*((pref$mu - p_sub$mu)/

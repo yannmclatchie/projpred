@@ -20,6 +20,15 @@ divmin <- function(formula, projpred_var, ...) {
                    mode = "function")
   } else if (has_grp && !has_add) {
     sdivmin <- fit_glmer_callback
+    if (getOption("projpred.PQL", FALSE)) {
+      # Split up the formula into a fixed and a random part (note: we could also
+      # use lme4::nobars() and lme4::findbars() here):
+      formula_random <- split_formula_random_gamm4(formula)
+      projpred_formulas_no_random <- validate_response_formula(
+        formula_random$formula
+      )
+      projpred_random <- formula_random$random
+    }
   } else if (!has_grp && has_add) {
     sdivmin <- fit_gam_callback
   } else if (has_grp && has_add) {
@@ -85,12 +94,20 @@ divmin <- function(formula, projpred_var, ...) {
   }
 }
 
+# Use projpred's own implementation to fit non-multilevel non-additive
+# submodels:
 fit_glm_ridge_callback <- function(formula, data,
                                    projpred_var = matrix(nrow = nrow(data)),
                                    projpred_regul = 1e-4, ...) {
-  fr <- model.frame(delete.intercept(formula), data = data)
-  contrasts_arg <- get_contrasts_arg_list(formula, data = data)
-  x <- model.matrix(fr, data = data, contrasts.arg = contrasts_arg)
+  # Preparations:
+  fr <- model.frame(formula, data = data)
+  # TODO: In the following model.matrix() call, allow user-specified contrasts
+  # to be passed to argument `contrasts.arg`. The `contrasts.arg` default
+  # (`NULL`) uses `options("contrasts")` internally, but it might be more
+  # convenient to let users specify contrasts directly. At that occasion,
+  # contrasts should also be tested thoroughly (not done until now).
+  x <- model.matrix(formula, data = fr)
+  x <- x[, colnames(x) != "(Intercept)", drop = FALSE]
   y <- model.response(fr)
   # Exclude arguments from `...` which cannot be passed to glm_ridge():
   dot_args <- list(...)
@@ -98,10 +115,12 @@ fit_glm_ridge_callback <- function(formula, data,
     names(dot_args),
     methods::formalArgs(glm_ridge)
   )]
+  # Call the submodel fitter:
   fit <- do.call(glm_ridge, c(
     list(x = x, y = y, lambda = projpred_regul, obsvar = projpred_var),
     dot_args
   ))
+  # Post-processing:
   rownames(fit$beta) <- colnames(x)
   sub <- nlist(
     alpha = fit$beta0,
@@ -116,39 +135,36 @@ fit_glm_ridge_callback <- function(formula, data,
 
 # Alternative to fit_glm_ridge_callback() (may be used via global option
 # `projpred.glm_fitter`):
-fit_glm_callback <- function(formula, family, projpred_var, projpred_regul,
-                             ...) {
-  tryCatch({
-    if (family$family == "gaussian" && family$link == "identity") {
-      # Exclude arguments from `...` which cannot be passed to stats::lm():
-      dot_args <- list(...)
-      dot_args <- dot_args[intersect(
-        names(dot_args),
-        union(methods::formalArgs(stats::lm),
-              union(methods::formalArgs(stats::lm.fit),
-                    methods::formalArgs(stats::lm.wfit)))
-      )]
-      return(suppressMessages(suppressWarnings(do.call(stats::lm, c(
-        list(formula = formula),
-        dot_args
-      )))))
-    } else {
-      # Exclude arguments from `...` which cannot be passed to stats::glm():
-      dot_args <- list(...)
-      dot_args <- dot_args[intersect(
-        names(dot_args),
-        union(methods::formalArgs(stats::glm),
-              methods::formalArgs(stats::glm.control))
-      )]
-      return(suppressMessages(suppressWarnings(do.call(stats::glm, c(
-        list(formula = formula, family = family),
-        dot_args
-      )))))
-    }
-  }, error = function(e) {
-    # May be used to handle errors.
-    stop(e)
-  })
+fit_glm_callback <- function(formula, family, ...) {
+  if (family$family == "gaussian" && family$link == "identity" &&
+      getOption("projpred.gaussian_not_as_generalized", TRUE)) {
+    # Exclude arguments from `...` which cannot be passed to stats::lm():
+    dot_args <- list(...)
+    dot_args <- dot_args[intersect(
+      names(dot_args),
+      c(methods::formalArgs(stats::lm),
+        methods::formalArgs(stats::lm.fit),
+        methods::formalArgs(stats::lm.wfit))
+    )]
+    # Call the submodel fitter:
+    return(suppressMessages(suppressWarnings(do.call(stats::lm, c(
+      list(formula = formula),
+      dot_args
+    )))))
+  } else {
+    # Exclude arguments from `...` which cannot be passed to stats::glm():
+    dot_args <- list(...)
+    dot_args <- dot_args[intersect(
+      names(dot_args),
+      c(methods::formalArgs(stats::glm),
+        methods::formalArgs(stats::glm.control))
+    )]
+    # Call the submodel fitter:
+    return(suppressMessages(suppressWarnings(do.call(stats::glm, c(
+      list(formula = formula, family = family),
+      dot_args
+    )))))
+  }
 }
 
 # Use package "mgcv" to fit additive non-multilevel submodels:
@@ -158,9 +174,10 @@ fit_gam_callback <- function(formula, ...) {
   dot_args <- list(...)
   dot_args <- dot_args[intersect(
     names(dot_args),
-    union(methods::formalArgs(gam),
-          methods::formalArgs(mgcv::gam.fit))
+    c(methods::formalArgs(gam),
+      methods::formalArgs(mgcv::gam.fit))
   )]
+  # Call the submodel fitter:
   return(suppressMessages(suppressWarnings(do.call(gam, c(
     list(formula = formula),
     dot_args
@@ -176,10 +193,11 @@ fit_gamm_callback <- function(formula, projpred_formula_no_random,
   dot_args <- list(...)
   dot_args <- dot_args[intersect(
     names(dot_args),
-    union(union(methods::formalArgs(gamm4),
-                methods::formalArgs(lme4::lFormula)),
-          methods::formalArgs(lme4::glFormula))
+    c(methods::formalArgs(gamm4),
+      methods::formalArgs(lme4::lFormula),
+      methods::formalArgs(lme4::glFormula))
   )]
+  # Call the submodel fitter:
   fit <- tryCatch({
     suppressMessages(suppressWarnings(do.call(gamm4, c(
       list(formula = projpred_formula_no_random, random = projpred_random,
@@ -188,18 +206,25 @@ fit_gamm_callback <- function(formula, projpred_formula_no_random,
     ))))
   }, error = function(e) {
     if (grepl("not positive definite", as.character(e))) {
-      scaled_data <- preprocess_data(data, projpred_formula_no_random)
-      fit_gamm_callback(
+      if ("optimx" %in% control$optimizer &&
+          length(control$optCtrl$method) > 0 &&
+          control$optCtrl$method == "nlminb") {
+        stop("Encountering the `not positive definite` error while running ",
+             "the lme4 fitting procedure, but cannot fix this automatically ",
+             "anymore. You will probably have to tweak gamm4 tuning ",
+             "parameters manually (via `...`).")
+      }
+      return(fit_gamm_callback(
         formula = formula,
         projpred_formula_no_random = projpred_formula_no_random,
         projpred_random = projpred_random,
-        data = scaled_data,
+        data = data,
         family = family,
         control = control_callback(family,
                                    optimizer = "optimx",
                                    optCtrl = list(method = "nlminb")),
         ...
-      )
+      ))
     } else {
       stop(e)
     }
@@ -211,19 +236,87 @@ fit_gamm_callback <- function(formula, projpred_formula_no_random,
   return(fit)
 }
 
-# Use package "lme4" to fit submodels for multilevel reference models (with a
-# fallback to "projpred"'s own implementation for fitting non-multilevel (and
-# non-additive) submodels):
-fit_glmer_callback <- function(formula, family,
+# Use package "lme4" to fit multilevel submodels:
+fit_glmer_callback <- function(formula, projpred_formula_no_random,
+                               projpred_random, family,
                                control = control_callback(family), ...) {
   tryCatch({
-    if (family$family == "gaussian" && family$link == "identity") {
+    if (getOption("projpred.PQL", FALSE)) {
+      # Exclude arguments from `...` which cannot be passed to MASS::glmmPQL():
+      dot_args <- list(...)
+      dot_args <- dot_args[intersect(
+        names(dot_args),
+        methods::formalArgs(MASS::glmmPQL)
+      )]
+      # Strip parentheses from group-level terms:
+      random_trms <- labels(terms(projpred_random))
+      random_fmls <- lapply(random_trms, function(random_trm) {
+        as.formula(paste("~", random_trm))
+      })
+      if (length(random_fmls) == 1) {
+        random_fmls <- random_fmls[[1]]
+      } else if (length(random_fmls) > 1) {
+        # Use the workaround(s) from <https://stackoverflow.com/questions/
+        # 36643713/how-to-specify-different-random-effects-in-nlme-vs-lme4/
+        # 38805602#38805602>:
+        random_trms_nogrp <- lapply(random_trms, function(random_trm) {
+          random_fml_nogrp <- as.formula(
+            paste("~", sub("[[:blank:]]*\\|.*$", "", random_trm))
+          )
+          return(labels(terms(random_fml_nogrp)))
+        })
+        ### TODO (glmmPQL): Do this via adding argument `data` explicitly:
+        stopifnot(!is.null(dot_args$data))
+        if ("projpred_internal_dummy1s_PQL" %in% names(dot_args$data)) {
+          stop("Need to write to column `projpred_internal_dummy1s_PQL` of ",
+               "`data`, but that column already exists. Please rename this ",
+               "column in `data` and try again.")
+        }
+        dot_args$data$projpred_internal_dummy1s_PQL <- factor(1)
+        ###
+        list_pdIdent <- lapply(random_trms, function(random_trm) {
+          return(nlme::pdIdent(as.formula(
+            paste("~", sub("^.*\\|[[:blank:]]*", "", random_trm), "- 1")
+          )))
+        })
+        idxs_multi_trms <- which(lengths(random_trms_nogrp) > 0)
+        if (length(idxs_multi_trms) > 0) {
+          warning("In order to be able to use MASS::glmmPQL(), we have to use ",
+                  "a workaround by which the random intercepts and random ",
+                  "slopes will be assumed to have a correlation of zero.")
+          list_pdIdent_add <- lapply(idxs_multi_trms, function(idx_multi_trms) {
+            random_grp <- sub("^.*\\|[[:blank:]]*", "",
+                              random_trms[[idx_multi_trms]])
+            random_IAs <- paste0(random_trms_nogrp[[idx_multi_trms]], ":",
+                                 random_grp)
+            return(lapply(random_IAs, function(random_IA) {
+              nlme::pdIdent(as.formula(paste("~", random_IA)))
+            }))
+          })
+          list_pdIdent_add <- unlist(list_pdIdent_add, recursive = FALSE)
+          list_pdIdent <- c(list_pdIdent, list_pdIdent_add)
+        }
+        random_fmls <- list(
+          projpred_internal_dummy1s_PQL = nlme::pdBlocked(list_pdIdent)
+        )
+      } else if (length(random_fmls) == 0) {
+        stop("Unexpected length of `random_fmls`.")
+      }
+      # Call the submodel fitter:
+      return(suppressMessages(suppressWarnings(do.call(MASS::glmmPQL, c(
+        list(fixed = projpred_formula_no_random, random = random_fmls,
+             family = family, control = control),
+        dot_args
+      )))))
+    } else if (family$family == "gaussian" && family$link == "identity" &&
+               getOption("projpred.gaussian_not_as_generalized", TRUE)) {
       # Exclude arguments from `...` which cannot be passed to lme4::lmer():
       dot_args <- list(...)
       dot_args <- dot_args[intersect(
         names(dot_args),
         methods::formalArgs(lme4::lmer)
       )]
+      # Call the submodel fitter:
       return(suppressMessages(suppressWarnings(do.call(lme4::lmer, c(
         list(formula = formula, control = control),
         dot_args
@@ -235,9 +328,9 @@ fit_glmer_callback <- function(formula, family,
         names(dot_args),
         methods::formalArgs(lme4::glmer)
       )]
+      # Call the submodel fitter:
       return(suppressMessages(suppressWarnings(do.call(lme4::glmer, c(
-        list(formula = formula, family = family,
-             control = control),
+        list(formula = formula, family = family, control = control),
         dot_args
       )))))
     }
@@ -258,29 +351,35 @@ fit_glmer_callback <- function(formula, family,
           control$optCtrl$method == "nlminb") {
         stop("Encountering the `not positive definite` error while running ",
              "the lme4 fitting procedure, but cannot fix this automatically ",
-             "anymore.")
+             "anymore. You will probably have to tweak lme4 tuning parameters ",
+             "manually (via `...`).")
       }
       return(fit_glmer_callback(
         formula = formula,
+        projpred_formula_no_random = projpred_formula_no_random,
+        projpred_random = projpred_random,
         family = family,
         control = control_callback(family,
                                    optimizer = "optimx",
                                    optCtrl = list(method = "nlminb")),
         ...
       ))
-    } else if (grepl("PIRLS step-halvings", as.character(e))) {
+    } else if (grepl("PIRLS", as.character(e))) {
       if (length(dot_args$nAGQ) > 0) {
         nAGQ_new <- dot_args$nAGQ + 1L
       } else {
         nAGQ_new <- 20L
       }
       if (nAGQ_new > 30L) {
-        stop("Encountering the `PIRLS step-halvings` error while running the ",
-             "lme4 fitting procedure, but cannot fix this automatically ",
-             "anymore.")
+        stop("Encountering a PIRLS error while running the lme4 fitting ",
+             "procedure, but cannot fix this automatically anymore. You will ",
+             "probably have to tweak lme4 tuning parameters manually (via ",
+             "`...`).")
       }
       return(fit_glmer_callback(
         formula = formula,
+        projpred_formula_no_random = projpred_formula_no_random,
+        projpred_random = projpred_random,
         family = family,
         control = control,
         nAGQ = nAGQ_new,
@@ -303,14 +402,67 @@ fit_glmer_callback <- function(formula, family,
         stop("Encountering the ",
              "`pwrssUpdate did not converge in (maxit) iterations` error ",
              "while running the lme4 fitting procedure, but cannot fix this ",
-             "automatically anymore.")
+             "automatically anymore. You will probably have to tweak lme4 ",
+             "tuning parameters manually (via `...`).")
       }
       return(fit_glmer_callback(
         formula = formula,
+        projpred_formula_no_random = projpred_formula_no_random,
+        projpred_random = projpred_random,
         family = family,
         control = control_callback(family, tolPwrss = tolPwrss_new,
                                    optCtrl = list(maxfun = maxfun_new,
                                                   maxit = maxit_new)),
+        ...
+      ))
+    } else if (getOption("projpred.PQL", FALSE) &&
+               grepl("iteration limit reached without convergence",
+                     as.character(e))) {
+      if (length(control$msMaxIter) > 0 && control$msMaxIter >= 100) {
+        stop("Encountering the `iteration limit reached without convergence` ",
+             "error while running the MASS::glmmPQL() fitting procedure, but ",
+             "cannot fix this automatically anymore. You will probably have ",
+             "to tweak MASS::glmmPQL() tuning parameters manually (via `...`).")
+      }
+      return(fit_glmer_callback(
+        formula = formula,
+        projpred_formula_no_random = projpred_formula_no_random,
+        projpred_random = projpred_random,
+        family = family,
+        control = control_callback(msMaxIter = 100),
+        ...
+      ))
+    } else if (getOption("projpred.PQL", FALSE) &&
+               grepl("false convergence", as.character(e))) {
+      if (length(control$niterEM) > 0 && control$niterEM >= 50) {
+        stop("Encountering the `false convergence` ",
+             "error while running the MASS::glmmPQL() fitting procedure, but ",
+             "cannot fix this automatically anymore. You will probably have ",
+             "to tweak MASS::glmmPQL() tuning parameters manually (via `...`).")
+      }
+      return(fit_glmer_callback(
+        formula = formula,
+        projpred_formula_no_random = projpred_formula_no_random,
+        projpred_random = projpred_random,
+        family = family,
+        control = control_callback(niterEM = 50),
+        ...
+      ))
+    } else if (getOption("projpred.PQL", FALSE) &&
+               grepl("fewer observations than random effects",
+                     as.character(e))) {
+      if (length(control$allow.n.lt.q) > 0 && isTRUE(control$allow.n.lt.q)) {
+        stop("Encountering the `fewer observations than random effects` ",
+             "error while running the MASS::glmmPQL() fitting procedure, but ",
+             "cannot fix this automatically anymore. You will probably have ",
+             "to tweak MASS::glmmPQL() tuning parameters manually (via `...`).")
+      }
+      return(fit_glmer_callback(
+        formula = formula,
+        projpred_formula_no_random = projpred_formula_no_random,
+        projpred_random = projpred_random,
+        family = family,
+        control = control_callback(allow.n.lt.q = TRUE),
         ...
       ))
     } else {
@@ -319,20 +471,13 @@ fit_glmer_callback <- function(formula, family,
   })
 }
 
-preprocess_data <- function(data, formula) {
-  tt <- extract_terms_response(formula)
-  non_group_terms <- c(tt$individual_terms, tt$interaction_terms)
-  X <- data %>%
-    dplyr::select(non_group_terms) %>%
-    scale()
-  data[, non_group_terms] <- X
-  return(data)
-}
-
 # Helper function for fit_glmer_callback() and fit_gamm_callback() to get the
 # appropriate control options depending on the family:
 control_callback <- function(family, ...) {
-  if (family$family == "gaussian" && family$link == "identity") {
+  if (getOption("projpred.PQL", FALSE)) {
+    return(nlme::lmeControl(...))
+  } else if (family$family == "gaussian" && family$link == "identity" &&
+             getOption("projpred.gaussian_not_as_generalized", TRUE)) {
     return(lme4::lmerControl(...))
   } else {
     return(lme4::glmerControl(...))
@@ -413,20 +558,50 @@ check_conv <- function(fit) {
 # Prediction functions for submodels --------------------------------------
 
 subprd <- function(fits, newdata) {
-  return(do.call(cbind, lapply(fits, function(fit) {
-    # Only pass argument `allow.new.levels` to the predict() generic if the fit
-    # is multilevel:
-    has_grp <- inherits(fit, c("lmerMod", "glmerMod"))
-    has_add <- inherits(fit, c("gam", "gamm4"))
-    if (has_add && !is.null(newdata)) {
+  prd_list <- lapply(fits, function(fit) {
+    is_glmmPQL <- inherits(fit, "glmmPQL")
+    is_glmm <- inherits(fit, c("lmerMod", "glmerMod"))
+    is_gam_gamm <- inherits(fit, c("gam", "gamm4"))
+    if (is_gam_gamm && !is.null(newdata)) {
       newdata <- cbind(`(Intercept)` = rep(1, NROW(newdata)), newdata)
     }
-    if (!has_grp) {
-      return(predict(fit, newdata = newdata))
+    if (is_glmmPQL) {
+      ### TODO (glmmPQL): Remove this as soon as a repair_re.glmmPQL() method
+      ### has been added:
+      if (!is.null(newdata)) {
+        has_new_grps <- sapply(names(fit$groups), function(grp_nm) {
+          any(!unique(newdata[[grp_nm]]) %in% unique(fit$groups[[grp_nm]]))
+        })
+        if (any(has_new_grps)) {
+          stop("Under construction (a repair_re.glmmPQL() method needs to be ",
+               "added to projpred.")
+        }
+      }
+      ###
+      if ("projpred_internal_dummy1s_PQL" %in% names(fit$data) &&
+          !is.null(newdata)) {
+        if ("projpred_internal_dummy1s_PQL" %in% names(newdata)) {
+          stop("Need to write to column `projpred_internal_dummy1s_PQL` of ",
+               "`newdata`, but that column already exists. Please rename this ",
+               "column in `newdata` and try again.")
+        }
+        newdata$projpred_internal_dummy1s_PQL <- factor(1)
+      }
+      return(
+        predict(fit, newdata = newdata)
+        ### TODO (glmmPQL): Add a repair_re.glmmPQL() method for this:
+        # predict(fit, newdata = newdata, level = 0) +
+        #   repair_re(fit, newdata = newdata)
+        ###
+      )
+    } else if (is_glmm) {
+      return(predict(fit, newdata = newdata, allow.new.levels = TRUE) +
+               repair_re(fit, newdata = newdata))
     } else {
-      return(predict(fit, newdata = newdata, allow.new.levels = TRUE))
+      return(predict(fit, newdata = newdata))
     }
-  })))
+  })
+  return(do.call(cbind, prd_list))
 }
 
 ## FIXME: find a way that allows us to remove this
@@ -437,12 +612,15 @@ predict.subfit <- function(subfit, newdata = NULL) {
     if (is.null(beta)) {
       return(as.matrix(rep(alpha, NROW(subfit$x))))
     } else {
-      return(subfit$x %*% rbind(alpha, beta))
+      return(cbind(1, subfit$x) %*% rbind(alpha, beta))
     }
   } else {
-    contrasts_arg <- get_contrasts_arg_list(subfit$formula, newdata)
-    x <- model.matrix(delete.response(terms(subfit$formula)), newdata,
-                      contrasts.arg = contrasts_arg)
+    # TODO: In the following model.matrix() call, allow user-specified contrasts
+    # to be passed to argument `contrasts.arg`. The `contrasts.arg` default
+    # (`NULL`) uses `options("contrasts")` internally, but it might be more
+    # convenient to let users specify contrasts directly. At that occasion,
+    # contrasts should also be tested thoroughly (not done until now).
+    x <- model.matrix(delete.response(terms(subfit$formula)), data = newdata)
     if (is.null(beta)) {
       return(as.matrix(rep(alpha, NROW(x))))
     } else {
@@ -461,9 +639,9 @@ predict.gamm4 <- function(fit, newdata = NULL) {
   }
   formula <- fit$formula
   random <- fit$random
-  gamm_struct <- model.matrix.gamm4(delete.response(terms(formula)),
+  gamm_struct <- model.matrix_gamm4(delete.response(terms(formula)),
                                     random = random, data = newdata)
-  ranef <- lme4::ranef(fit$mer)
+  ranef <- lme4::ranef(fit$mer) # TODO (GAMMs): Add `, condVar = FALSE` here?
   b <- gamm_struct$b
   mf <- gamm_struct$mf
 
@@ -482,4 +660,84 @@ predict.gamm4 <- function(fit, newdata = NULL) {
     gamm_pred <- gamm_pred + r_pred
   }
   return(as.matrix(unname(gamm_pred)))
+}
+
+## Random-effects adjustments ---------------------------------------------
+
+empty_intersection_comb <- function(x) {
+  length(intersect(x[[1]]$comb, x[[2]]$comb)) == 0
+}
+
+repair_re <- function(object, newdata) {
+  UseMethod("repair_re")
+}
+
+# For objects of class `merMod`, the following repair_re() method will draw the
+# random effects for new group levels from a (multivariate) Gaussian
+# distribution.
+#
+# License/copyright notice: repair_re.merMod() is inspired by and uses code
+# snippets from lme4:::predict.merMod() from lme4 version 1.1-28 (see
+# <https://CRAN.R-project.org/package=lme4>). See the `LICENSE` file in
+# projpred's root directory for details.
+#
+# The copyright statement for lme4 version 1.1-28 is:
+# Copyright (C) 2003-2022 The LME4 Authors (see
+# <https://CRAN.R-project.org/package=lme4>).
+#
+# The license of lme4 version 1.1-28 is:
+# "GPL (>=2)" (see <https://CRAN.R-project.org/package=lme4>).
+#' @noRd
+#' @export
+repair_re.merMod <- function(object, newdata) {
+  stopifnot(!is.null(newdata))
+  ranef_tmp <- lme4::ranef(object, condVar = FALSE)
+  vnms <- names(ranef_tmp)
+  lvls_list <- lapply(setNames(nm = vnms), function(vnm) {
+    from_fit <- rownames(ranef_tmp[[vnm]])
+    if (!vnm %in% names(newdata)) {
+      if (any(grepl("\\|.+/", labels(terms(formula(object)))))) {
+        stop("The `/` syntax for nested group-level terms is currently not ",
+             "supported. Please try to write out the interaction term implied ",
+             "by the `/` syntax (see Table 2 in lme4's vignette called ",
+             "\"Fitting Linear Mixed-Effects Models Using lme4\").")
+      } else {
+        stop("Could not find column `", vnm, "` in `newdata`.")
+      }
+    }
+    from_new <- levels(as.factor(newdata[, vnm]))
+    list(comb = union(from_fit, from_new),
+         exist = intersect(from_new, from_fit),
+         new = setdiff(from_new, from_fit))
+  })
+  # In case of duplicated levels across group variables, later code would have
+  # to be adapted:
+  if (length(lvls_list) >= 2 &&
+      !all(utils::combn(lvls_list, 2, empty_intersection_comb))) {
+    stop("Currently, projpred requires all variables with group-level effects ",
+         "to have disjoint level sets.")
+  }
+  re_fml <- ("lme4" %:::% "reOnly")(formula(object))
+  # Note: Calling lme4::mkNewReTrms() with `re.form = NULL` fails.
+  ranefs_prep <- lme4::mkNewReTrms(object,
+                                   newdata = newdata,
+                                   re.form = re_fml,
+                                   allow.new.levels = TRUE)
+  names(ranefs_prep$b) <- rownames(ranefs_prep$Zt)
+
+  VarCorr_tmp <- lme4::VarCorr(object)
+  for (vnm in vnms) {
+    lvls_exist <- lvls_list[[vnm]]$exist
+    lvls_new <- lvls_list[[vnm]]$new
+    ranefs_prep$b[names(ranefs_prep$b) %in% lvls_exist] <- 0
+    if (length(lvls_new) > 0) {
+      ranefs_prep$b[names(ranefs_prep$b) %in% lvls_new] <- t(mvtnorm::rmvnorm(
+        n = length(lvls_new),
+        # Add `[, , drop = FALSE]` to drop attributes:
+        sigma = VarCorr_tmp[[vnm]][, , drop = FALSE],
+        checkSymmetry = FALSE
+      ))
+    }
+  }
+  return(drop(as(ranefs_prep$b %*% ranefs_prep$Zt, "matrix")))
 }

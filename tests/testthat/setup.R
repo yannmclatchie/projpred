@@ -8,6 +8,10 @@ options(warn = 1)
 
 # These switches may be set to `FALSE` to save time (e.g., when debugging
 # interactively):
+# Run more tests, at the downside of increased runtime?:
+run_more <- FALSE
+# Run project()?:
+run_prj <- identical(Sys.getenv("NOT_CRAN"), "true")
 # Run varsel()?:
 run_vs <- identical(Sys.getenv("NOT_CRAN"), "true")
 # Run cv_varsel()?:
@@ -16,16 +20,11 @@ run_cvvs <- run_vs
 # search (`FALSE`)?:
 run_valsearch_always <- FALSE
 # Run the `cvfits` test for all possible test setups (`TRUE`) or just for the
-# first one (`FALSE`)?:
-run_cvfits_all <- TRUE
+# first one among the GLMMs (`FALSE`; note that if there is no GLMM available in
+# that test, the first test setup among those for K-fold CV is used)?:
+run_cvfits_all <- FALSE
 # Run tests for "brmsfit"s?:
 run_brms <- identical(Sys.getenv("NOT_CRAN"), "true")
-if (run_brms && packageVersion("brms") <= package_version("2.16.1")) {
-  warning("Deactivating the brms tests because brms version <= 2.16.1 calls ",
-          "init_refmodel() with the now omitted argument `folds`. Install a ",
-          "newer brms version to run the brms tests.")
-  run_brms <- FALSE
-}
 # Run snapshot tests?:
 # Notes:
 #   * For general information about snapshot tests, see, e.g.,
@@ -42,9 +41,15 @@ if (run_brms && packageVersion("brms") <= package_version("2.16.1")) {
 #   least as long as they are listed in the `.Rbuildignore` file), so they would
 #   be re-created, which would throw a lot of test warnings (which could obscure
 #   potentially important warnings).
-run_snaps <- identical(Sys.getenv("NOT_CRAN"), "true") &&
-  !identical(toupper(Sys.getenv("CI")), "TRUE") &&
-  identical(Sys.getenv("_R_CHECK_FORCE_SUGGESTS_"), "")
+run_snaps <- Sys.getenv("RUN_SNAPS")
+if (identical(run_snaps, "")) {
+  run_snaps <- identical(Sys.getenv("NOT_CRAN"), "true") &&
+    !identical(toupper(Sys.getenv("CI")), "TRUE") &&
+    identical(Sys.getenv("_R_CHECK_FORCE_SUGGESTS_"), "")
+} else {
+  run_snaps <- as.logical(toupper(run_snaps))
+  stopifnot(isTRUE(run_snaps) || isFALSE(run_snaps))
+}
 if (run_snaps) {
   testthat_ed_max2 <- edition_get() <= 2
 }
@@ -112,20 +117,32 @@ if (run_prll) {
     }
   }
 }
+# Run all test scripts (following this setup script) in a completely random RNG
+# state? (The tests should still pass then, because in all situations where RNG
+# is used, a specific seed is supposed to be set.):
+run_randRNG <- identical(Sys.getenv("NOT_CRAN"), "true")
+# Run tests for additive models (GAMs and GAMMs)?:
+run_additive <- TRUE
 
 source(testthat::test_path("helpers", "unlist_cust.R"), local = TRUE)
 source(testthat::test_path("helpers", "testers.R"), local = TRUE)
 source(testthat::test_path("helpers", "args.R"), local = TRUE)
 source(testthat::test_path("helpers", "getters.R"), local = TRUE)
 source(testthat::test_path("helpers", "formul_handlers.R"), local = TRUE)
+source(testthat::test_path("helpers", "revIA.R"), local = TRUE)
 
-mod_nms <- setNames(nm = c("glm", "glmm", "gam", "gamm"))
-### Exclude additive models (GAMs and GAMMs) for now since their implementation
-### is currently only experimental:
-mod_nms <- setNames(nm = setdiff(mod_nms, c("gam", "gamm")))
-###
+mod_nms <- c("glm", "glmm", "gam", "gamm")
+if (run_additive) {
+  # Suppress the warning for additive models (GAMs and GAMMs) stating that their
+  # implementation is currently only experimental:
+  options(projpred.warn_additive_experimental = FALSE)
+} else {
+  mod_nms <- setdiff(mod_nms, c("gam", "gamm"))
+}
+mod_nms <- setNames(nm = mod_nms)
 
-fam_nms <- setNames(nm = c("gauss", "brnll", "binom", "poiss"))
+fam_nms <- c("gauss", "brnll", "binom", "poiss")
+fam_nms <- setNames(nm = fam_nms)
 
 # Data --------------------------------------------------------------------
 
@@ -141,7 +158,7 @@ seed_dat <- 8541351
 set.seed(seed_dat)
 
 ## GLMs --------------------------------------------------------------------
-## Add nonpooled ("fixed") effects to the intercept-(and-offset-)only model
+## Add population-level effects to the intercept-(and-offset-)only model
 
 nterms_cont <- 3L
 x_cont <- matrix(rnorm(nobsv * nterms_cont), nobsv, nterms_cont)
@@ -178,7 +195,7 @@ eta_glm <- icpt +
 nterms_glm <- nterms_cont + nterms_cate
 
 ## GLMMs ------------------------------------------------------------------
-## Add partially pooled ("random") effects to the GLMs
+## Add group-level effects to the GLMs, yielding GLMMs
 
 nlvl_ran <- c(6L)
 nlvl_ran <- setNames(nlvl_ran, seq_along(nlvl_ran))
@@ -191,8 +208,8 @@ nterms_z <- length(nlvl_ran) * 2L
 z_list <- lapply(nlvl_ran, function(nlvl_ran_i) {
   z <- gl(n = nlvl_ran_i, k = floor(nobsv / nlvl_ran_i), length = nobsv,
           labels = paste0("lvl", seq_len(nlvl_ran_i)))
-  r_icpts <- rnorm(nlvl_ran_i, sd = 0.8)
-  r_xco1 <- rnorm(nlvl_ran_i, sd = 0.8)
+  r_icpts <- rnorm(nlvl_ran_i, sd = 2.8)
+  r_xco1 <- rnorm(nlvl_ran_i, sd = 2.8)
   eta_z <- r_icpts[z] + r_xco1[z] * x_cont[, 1]
   return(nlist(z, eta_z, r_icpts, r_xco1))
 })
@@ -230,34 +247,42 @@ f_binom <- f_brnll <- binomial()
 f_poiss <- poisson()
 dis_tst <- runif(1L, 1, 2)
 wobs_tst <- sample(1:4, nobsv, replace = TRUE)
-dat <- lapply(mod_nms, function(mod_nm) {
-  lapply(fam_nms, function(fam_nm) {
-    pred_link <- get(paste0("eta_", mod_nm))
-    if (fam_nm != "brnll" && !mod_nm %in% c("gam", "gamm")) {
-      # For the "brnll" `fam_nm`, offsets are simply not added to have some
-      # scenarios without offsets.
-      # For GAMs, offsets are not added because of rstanarm issue #546 (see
-      # also further below).
-      # For GAMMs, offsets are not added because of rstanarm issue #253 (see
-      # also further below).
-      pred_link <- pred_link + offs_tst
-    }
-    pred_resp <- get(paste0("f_", fam_nm))$linkinv(pred_link)
-    if (fam_nm == "gauss") {
-      return(rnorm(nobsv, mean = pred_resp, sd = dis_tst))
-    } else if (fam_nm == "brnll") {
-      return(rbinom(nobsv, 1, pred_resp))
-    } else if (fam_nm == "binom") {
-      return(rbinom(nobsv, wobs_tst, pred_resp))
-    } else if (fam_nm == "poiss") {
-      return(rpois(nobsv, pred_resp))
-    } else {
-      stop("Unknown `fam_nm`.")
-    }
+offs_expr <- expression(fam_nm != "brnll" && !mod_nm %in% c("gam", "gamm"))
+cre_dat <- function(idxs_crr, offs_crr, wobs_crr, dis_crr) {
+  nobsv_crr <- length(idxs_crr)
+  dat_crr <- lapply(mod_nms, function(mod_nm) {
+    lapply(fam_nms, function(fam_nm) {
+      pred_link <- get(paste0("eta_", mod_nm))
+      pred_link <- pred_link[idxs_crr, , drop = FALSE]
+      if (eval(offs_expr)) {
+        # For the "brnll" `fam_nm`, offsets are simply not added to have some
+        # scenarios without offsets.
+        # For GAMs, offsets are not added because of rstanarm issue #546 (see
+        # also further below).
+        # For GAMMs, offsets are not added because of rstanarm issue #253 (see
+        # also further below).
+        pred_link <- pred_link + offs_crr
+      }
+      pred_resp <- get(paste0("f_", fam_nm))$linkinv(pred_link)
+      if (fam_nm == "gauss") {
+        return(rnorm(nobsv_crr, mean = pred_resp, sd = dis_crr))
+      } else if (fam_nm == "brnll") {
+        return(rbinom(nobsv_crr, 1, pred_resp))
+      } else if (fam_nm == "binom") {
+        return(rbinom(nobsv_crr, wobs_crr, pred_resp))
+      } else if (fam_nm == "poiss") {
+        return(rpois(nobsv_crr, pred_resp))
+      } else {
+        stop("Unknown `fam_nm`.")
+      }
+    })
   })
-})
-dat <- unlist(dat, recursive = FALSE)
-names(dat) <- paste("y", gsub("\\.", "_", names(dat)), sep = "_")
+  dat_crr <- unlist(dat_crr, recursive = FALSE)
+  names(dat_crr) <- paste("y", gsub("\\.", "_", names(dat_crr)), sep = "_")
+  return(dat_crr)
+}
+dat <- cre_dat(idxs_crr = seq_len(nobsv), offs_crr = offs_tst,
+               wobs_crr = wobs_tst, dis_crr = dis_tst)
 dat <- data.frame(
   dat,
   xco = x_cont, xca = lapply(x_cate_list, "[[", "x_cate"),
@@ -269,25 +294,6 @@ dat <- data.frame(
 if (ncol(s_mat) == 1) {
   names(dat)[names(dat) == "s"] <- "s.1"
 }
-
-## nterms -----------------------------------------------------------------
-
-ntermss <- sapply(mod_nms, function(mod_nm) {
-  get(paste("nterms", mod_nm, sep = "_"))
-})
-nterms_max_tst <- min(ntermss)
-
-nterms_unavail <- list(
-  single = nterms_max_tst + 130L,
-  vec = c(nterms_max_tst + 130L, nterms_max_tst + 290L)
-)
-nterms_avail <- list(
-  default_nterms = NULL,
-  empty = 0L,
-  single = nterms_max_tst %/% 2L,
-  subvec = as.integer(round(seq(0, nterms_max_tst, length.out = 3))),
-  full = 0:nterms_max_tst
-)
 
 ## Modified datasets ------------------------------------------------------
 
@@ -309,6 +315,22 @@ dat_offs_new <- within(dat, {
   offs_col_new <- seq(-2, 2, length.out = nobsv)
 })
 
+nobsv_indep <- tail(nobsv_tst, 1)
+dis_indep <- runif(1L, 1, 2)
+offs_indep <- rnorm(nobsv_indep)
+wobs_indep <- sample(1:4, nobsv_indep, replace = TRUE)
+idxs_indep <- sample.int(nobsv, size = nobsv_indep, replace = TRUE)
+dat_indep <- cre_dat(idxs_crr = idxs_indep, offs_crr = offs_indep,
+                     wobs_crr = wobs_indep, dis_crr = dis_indep)
+dat_indep <- cbind(
+  as.data.frame(dat_indep),
+  dat[idxs_indep,
+      grep("^y_", names(dat), value = TRUE, invert = TRUE),
+      drop = FALSE]
+)
+dat_indep$wobs_col <- wobs_indep
+dat_indep$offs_col <- offs_indep
+
 # Fits --------------------------------------------------------------------
 
 ## Setup ------------------------------------------------------------------
@@ -327,22 +349,38 @@ if (run_brms) {
   pkg_nms <- c(pkg_nms, "brms")
   # For storing "brmsfit"s locally:
   file_pth <- testthat::test_path("bfits")
-  if(!dir.exists(file_pth)) dir.create(file_pth)
+  if (!dir.exists(file_pth)) dir.create(file_pth)
+  # Backend:
+  if (identical(Sys.getenv("TESTS_BRMS_BACKEND"), "cmdstanr") &&
+      requireNamespace("cmdstanr", quietly = TRUE) &&
+      # Relative file paths for cmdstanr's global option
+      # `cmdstanr_write_stan_file_dir` didn't work before cmdstanr PR #665.
+      # Using the workaround `file.path(getwd(), file_pth)` instead of only
+      # `file_pth` also doesn't work in `R CMD check` (it doesn't throw any
+      # exceptions, but recompilations take place, causing a huge increase in
+      # runtime). At the time of cmdstanr's PR #665, the (development) version
+      # number of cmdstanr was 0.5.2.1, so requiring >= 0.5.3 guarantees that
+      # the fix is included:
+      packageVersion("cmdstanr") >= "0.5.3" &&
+      !is.null(cmdstanr::cmdstan_version(error_on_NA = FALSE))) {
+    options(brms.backend = "cmdstanr")
+    options(cmdstanr_write_stan_file_dir = file_pth)
+  }
 }
 pkg_nms <- setNames(nm = pkg_nms)
 
 chains_tst <- 2L
 iter_tst <- 500L
+nrefdraws <- chains_tst * iter_tst %/% 2L
 seed_fit <- 74345
 
 ### Formula ---------------------------------------------------------------
 
 # Notes:
-#   * Argument `offset` has an issue for rstanarm::stan_glmer() (see rstanarm
-#     issue #541). Instead, use offset() in the formula.
 #   * Argument `offset` is not supported by rstanarm::stan_gamm4(). Instead, use
-#     offset() in the formula. However, because of rstanarm issue #546 and
-#     rstanarm issue #253, omit the offsets in GAMs and GAMMs.
+#     offset() in the formula (like for all other models). However, because of
+#     rstanarm issue #546 and rstanarm issue #253, omit the offsets in GAMs and
+#     GAMMs.
 #   * In rstanarm::stan_gamm4(), multilevel terms are specified via argument
 #     `random`.
 
@@ -355,13 +393,10 @@ trms_common_spcl <- c("xco.1", "I(xco.1^2)",
                       "offset(offs_col)")
 
 # Solution terms for project()-ing from `"refmodel"`s:
-### Because of issue #149:
-# solterms_x <- c("xco.2", "xca.1")
-solterms_x <- c("xco.2", "xco.1")
-###
+solterms_x <- c("xco.2", "xca.1")
 solterms_z <- c("(1 | z.1)", "(xco.1 | z.1)")
 solterms_s <- c("s(s.1)") # , "s(s.2)"
-solterms_spcl <- c("xco.1", "I(xco.1^2)", "exp(xco.2)",
+solterms_spcl <- c("xca.1", "xco.1", "I(xco.1^2)", "exp(xco.2)",
                    "I(as.numeric(xco.3 > 0))",
                    "exp(xco.2):I(as.numeric(xco.3 > 0))")
 
@@ -401,11 +436,8 @@ for (obj_symb_chr in c(paste0("f_", fam_nms))) {
 }
 
 args_fit <- lapply(pkg_nms, function(pkg_nm) {
-  if (pkg_nm == "brms") {
-    # For speed reasons:
-    mod_nms <- intersect(mod_nms, "glm")
-  }
-
+  # Depending on the package used for fitting the reference model, `mod_nms`
+  # could be restricted here.
   mod_nms <- setNames(nm = mod_nms)
   lapply(mod_nms, function(mod_nm) {
     if (pkg_nm == "rstanarm") {
@@ -417,6 +449,14 @@ args_fit <- lapply(pkg_nms, function(pkg_nm) {
     }
 
     if (mod_nm != "glm") {
+      if (pkg_nm == "brms") {
+        # For speed reasons, do not test all families:
+        if (mod_nm == "glmm") {
+          fam_nms <- intersect(fam_nms, "brnll")
+        } else {
+          fam_nms <- intersect(fam_nms, "binom")
+        }
+      }
       # Because of issue #207:
       fam_nms <- setdiff(fam_nms, "poiss")
     }
@@ -447,15 +487,15 @@ args_fit <- lapply(pkg_nms, function(pkg_nm) {
         family_crr <- as.name(paste0("f_", fam_nm))
       }
 
-      if (fam_nm == "brnll" ||
-          (pkg_nm == "rstanarm" && mod_nm %in% c("gam", "gamm"))) {
-        # For the "brnll" `fam_nm`, the offsets are simply omitted to have some
-        # scenarios without offsets.
-        # In the rstanarm "gam" and "gamm" case, the offsets are omitted because
-        # of rstanarm issue #546 and rstanarm issue #253.
-        offss_nms <- "without_offs"
-      } else {
+      if (eval(offs_expr)) {
         offss_nms <- "with_offs"
+      } else {
+        # For the "brnll" `fam_nm`, the offsets are simply omitted to have some
+        # scenarios without offsets. In the rstanarm "gam" and "gamm" cases, the
+        # offsets are omitted because of rstanarm issue #546 and rstanarm issue
+        # #253. (The brms "gam" and "gamm" cases are handled in the same way as
+        # the rstanarm ones to avoid too many special cases.)
+        offss_nms <- "without_offs"
       }
 
       formul_nms <- setNames(nm = formul_nms)
@@ -493,12 +533,6 @@ args_fit <- lapply(pkg_nms, function(pkg_nm) {
           # the cbind() syntax (indirectly, because the number of trials is the
           # sum of the two columns)):
           wobss_nms <- "without_wobs"
-        } else if (pkg_nm == "rstanarm" && mod_nm == "glm" &&
-                   fam_nm == "gauss" && formul_nm != "spclformul") {
-          # Here, rstanarm:::kfold.stanreg() is applied, so we also need the
-          # model without observation weights (because
-          # rstanarm:::kfold.stanreg() doesn't support observation weights):
-          wobss_nms <- c("with_wobs", "without_wobs")
         } else {
           wobss_nms <- "with_wobs"
         }
@@ -530,7 +564,11 @@ args_fit <- lapply(pkg_nms, function(pkg_nm) {
                             random_arg)
             } else if (pkg_nm == "brms") {
               pkg_args <- list(file = file_pth,
-                               file_refit = "on_change") # , silent = 2
+                               file_refit = "on_change",
+                               silent = 2)
+              if (identical(getOption("brms.backend", "rstan"), "cmdstanr")) {
+                pkg_args <- c(pkg_args, list(diagnostics = NULL))
+              }
             }
 
             return(c(
@@ -561,6 +599,21 @@ args_fit <- lapply(setNames(nm = names(args_fit)), function(args_fit_nm) {
   return(args_fit[[args_fit_nm]])
 })
 
+if (!run_more) {
+  sel_fits <- c(
+    "rstanarm.glm.gauss.stdformul.with_wobs.with_offs",
+    "rstanarm.glm.brnll.stdformul.without_wobs.without_offs",
+    "rstanarm.glmm.gauss.spclformul.with_wobs.with_offs",
+    "rstanarm.gam.gauss.spclformul.with_wobs.without_offs",
+    "rstanarm.gamm.brnll.stdformul.without_wobs.without_offs",
+    "brms.glm.poiss.stdformul.with_wobs.with_offs",
+    "brms.glmm.brnll.stdformul.without_wobs.without_offs",
+    # "brms.gam.binom.stdformul.without_wobs.without_offs",
+    "brms.gamm.binom.stdformul.without_wobs.without_offs"
+  )
+  args_fit <- args_fit[names(args_fit) %in% sel_fits]
+}
+
 ## Run --------------------------------------------------------------------
 
 fits <- suppressWarnings(lapply(args_fit, function(args_fit_i) {
@@ -586,21 +639,42 @@ fits <- suppressWarnings(lapply(args_fit, function(args_fit_i) {
 
 ## Setup ------------------------------------------------------------------
 
+seed_tst <- 20411346
+seed2_tst <- 866028
+seed3_tst <- 1208499
+
 nclusters_tst <- 2L
 nclusters_pred_tst <- 3L
-ndr_ncl_pred_tst <- list(
-  default_ndr_ncl = list(),
-  noclust = list(ndraws = 25L),
+if (!run_more) {
+  ndr_ncl_pred_tst <- list()
+} else {
+  ndr_ncl_pred_tst <- list(default_ndr_ncl = list())
+}
+ndr_ncl_pred_tst <- c(ndr_ncl_pred_tst, list(
+  noclust = list(ndraws = nclusters_pred_tst),
   clust = list(nclusters = nclusters_pred_tst),
-  clust_draws = list(ndraws = nclusters_pred_tst),
   clust1 = list(nclusters = 1L)
-)
+))
+if (any(unlist(lapply(ndr_ncl_pred_tst, "[[", "ndraws")) <= 20)) {
+  # Suppress the message concerning small `ndraws` or `ndraws_pred` values:
+  options(projpred.mssg_ndraws = FALSE)
+}
 nresample_clusters_tst <- c(1L, 100L)
 
 meth_tst <- list(
   default_meth = list(),
   L1 = list(method = "L1"),
   forward = list(method = "forward")
+)
+
+search_trms_tst <- list(
+  default_search_trms = list(),
+  alltrms = list(search_terms = setdiff(trms_common, "offset(offs_col)")),
+  fixed = list(search_terms = c("xco.1", "xco.1 + xco.2", "xco.1 + xco.3",
+                                "xco.1 + xco.2 + xco.3")),
+  excluded = list(search_terms = c("xco.2", "xco.3", "xco.2 + xco.3")),
+  empty_size = list(search_terms = c("xco.1 + xco.2", "xco.1 + xco.3",
+                                     "xco.2 + xco.3", "xco.1 + xco.2 + xco.3"))
 )
 
 K_tst <- 2L
@@ -615,18 +689,55 @@ stats_common <- c("elpd", "mlpd", "mse", "rmse")
 stats_tst <- list(
   default_stats = list(),
   common_stats = list(stats = stats_common),
-  binom_stats = list(stats = c(stats_common, c("acc", "auc")))
+  binom_stats = list(stats = c(stats_common, "acc", "auc"))
 )
 type_tst <- c("mean", "lower", "upper", "se")
 
-seed_tst <- 74345
-seed2_tst <- 866028
-seed3_tst <- 1208499
+### nterms ----------------------------------------------------------------
+
+ntermss <- sapply(mod_nms, function(mod_nm) {
+  get(paste("nterms", mod_nm, sep = "_"))
+})
+# The `nterms_max` setting which will be used throughout the tests, except for
+# the special `search_terms` tests:
+nterms_max_tst <- min(ntermss)
+if (!run_more) {
+  nterms_max_tst <- min(nterms_max_tst, 2L)
+}
+
+nterms_unavail <- list(
+  single = nterms_max_tst + 130L,
+  vec = c(nterms_max_tst + 130L, nterms_max_tst + 290L)
+)
+if (!run_more) {
+  nterms_avail <- list()
+} else {
+  nterms_avail <- list(default_nterms = NULL)
+}
+nterms_avail <- c(nterms_avail, list(
+  empty = 0L,
+  single = nterms_max_tst %/% 2L,
+  subvec = as.integer(round(seq(0, nterms_max_tst, length.out = 2))),
+  full = 0:nterms_max_tst
+))
+
+nterms_max_smmry <- list(
+  default_nterms_max_smmry = NULL,
+  halfway = nterms_max_tst %/% 2L
+)
 
 ## Reference model --------------------------------------------------------
 
 args_ref <- lapply(setNames(nm = names(fits)), function(tstsetup_fit) {
-  c(nlist(tstsetup_fit), only_nonargs(args_fit[[tstsetup_fit]]))
+  if (args_fit[[tstsetup_fit]]$pkg_nm == "brms" &&
+      packageVersion("brms") >= "2.16.4") {
+    pkg_args <- list(brms_seed = seed2_tst)
+  } else {
+    pkg_args <- list()
+  }
+  return(c(nlist(tstsetup_fit),
+           only_nonargs(args_fit[[tstsetup_fit]]),
+           pkg_args))
 })
 
 refmods <- lapply(args_ref, function(args_ref_i) {
@@ -641,11 +752,7 @@ refmods <- lapply(args_ref, function(args_ref_i) {
 ### varsel() --------------------------------------------------------------
 
 if (run_vs) {
-  # Exclude the case which was added for K-fold CV only:
-  tstsetups_vs_ref <- setNames(
-    nm = grep("\\.gauss\\..*\\.without_wobs", names(refmods), value = TRUE,
-              invert = TRUE)
-  )
+  tstsetups_vs_ref <- setNames(nm = names(refmods))
   args_vs <- lapply(tstsetups_vs_ref, function(tstsetup_ref) {
     mod_crr <- args_ref[[tstsetup_ref]]$mod_nm
     fam_crr <- args_ref[[tstsetup_ref]]$fam_nm
@@ -658,17 +765,35 @@ if (run_vs) {
       meth <- meth_tst["default_meth"]
     }
     lapply(meth, function(meth_i) {
-      return(c(
-        nlist(tstsetup_ref), only_nonargs(args_ref[[tstsetup_ref]]),
-        list(
-          nclusters = nclusters_tst, nclusters_pred = nclusters_pred_tst,
-          nterms_max = nterms_max_tst, verbose = FALSE, seed = seed_tst
-        ),
-        meth_i
-      ))
+      if (mod_crr == "glm" && fam_crr == "gauss" &&
+          grepl("\\.stdformul\\.", tstsetup_ref) &&
+          identical(meth_i$method, "forward")) {
+        # Here, we also test non-NULL `search_terms`:
+        search_trms <- search_trms_tst
+      } else {
+        search_trms <- search_trms_tst["default_search_trms"]
+      }
+      lapply(search_trms, function(search_trms_i) {
+        if (length(search_trms_i) &&
+            !identical(search_trms_i$search_terms,
+                       search_trms_tst$alltrms$search_terms)) {
+          nterms_max_tst <- count_terms_chosen(search_trms_i$search_terms) - 1L
+        }
+        return(c(
+          nlist(tstsetup_ref), only_nonargs(args_ref[[tstsetup_ref]]),
+          list(
+            nclusters = nclusters_tst, nclusters_pred = nclusters_pred_tst,
+            nterms_max = nterms_max_tst, verbose = FALSE, seed = seed_tst
+          ),
+          meth_i, search_trms_i
+        ))
+      })
     })
   })
   args_vs <- unlist_cust(args_vs)
+  stopifnot(sum(sapply(args_vs, function(args_vs_i) {
+    !is.null(args_vs_i$search_terms)
+  })) >= 1)
 
   vss <- lapply(args_vs, function(args_vs_i) {
     do.call(varsel, c(
@@ -681,39 +806,39 @@ if (run_vs) {
 ### cv_varsel() -----------------------------------------------------------
 
 if (run_cvvs) {
-  tstsetups_cvvs_ref <- setNames(nm = names(refmods))
+  tstsetups_cvvs_ref <- names(refmods)
+  if (!run_more) {
+    tstsetups_cvvs_ref <- grep("\\.gam\\.", tstsetups_cvvs_ref, value = TRUE,
+                               invert = TRUE)
+  }
+  # Under the special test settings used here, Bernoulli GAMMs often seem to run
+  # into lme4 errors. However, since these Bernoulli GAMMs are basically
+  # redundant given the other tested models, we can simply skip them:
+  tstsetups_cvvs_ref <- grep("\\.gamm\\.brnll\\.", tstsetups_cvvs_ref,
+                             value = TRUE, invert = TRUE)
+  tstsetups_cvvs_ref <- setNames(nm = tstsetups_cvvs_ref)
   args_cvvs <- lapply(tstsetups_cvvs_ref, function(tstsetup_ref) {
+    pkg_crr <- args_ref[[tstsetup_ref]]$pkg_nm
     mod_crr <- args_ref[[tstsetup_ref]]$mod_nm
     fam_crr <- args_ref[[tstsetup_ref]]$fam_nm
-    if (mod_crr == "glm" && fam_crr == "gauss") {
-      if (!grepl("\\.spclformul", tstsetup_ref)) {
-        # Here, we test the default `method` (which is L1 search here) as well
-        # as forward search:
-        meth <- meth_tst[c("default_meth", "forward")]
-      } else {
-        meth <- meth_tst["default_meth"]
-      }
-      if (grepl("\\.without_wobs", tstsetup_ref)) {
-        # Here, we only test the "kfold" `cv_method`:
-        cvmeth <- cvmeth_tst["kfold"]
-      } else {
-        # Here, we only test the default `cv_method` (which is LOO CV):
+    meth <- meth_tst["default_meth"]
+    if (grepl("\\.without_wobs", tstsetup_ref)) {
+      # In principle, we want to use K-fold CV here and LOO CV else because
+      # rstanarm:::kfold.stanreg() doesn't support observation weights. However,
+      # there are some special cases to take care of:
+      if (pkg_crr == "brms" && packageVersion("brms") <= "2.16.3") {
+        # For brms versions <= 2.16.3, there is a reproducibility issue when
+        # using K-fold CV, so use LOO CV:
         cvmeth <- cvmeth_tst["default_cvmeth"]
+      } else if (pkg_crr == "brms" && mod_crr == "gamm") {
+        # For GAMMs fitted by brms, there is a (random, i.e., only occasional)
+        # reproducibility issue when using K-fold CV, so use LOO CV:
+        cvmeth <- cvmeth_tst["default_cvmeth"]
+      } else {
+        cvmeth <- cvmeth_tst["kfold"]
       }
     } else {
-      meth <- meth_tst["default_meth"]
-      if (mod_crr != "glm" && grepl("\\.without_wobs", tstsetup_ref)) {
-        cvmeth <- cvmeth_tst["kfold"]
-        if (mod_crr == "gamm" && fam_crr == "brnll") {
-          # In this case, K-fold CV leads to an error in pwrssUpdate()
-          # ("(maxstephalfit) PIRLS step-halvings failed to reduce deviance in
-          # pwrssUpdate"). Therefore, use LOO CV:
-          cvmeth <- cvmeth_tst["default_cvmeth"]
-          # TODO (GAMMs): Fix this.
-        }
-      } else {
-        cvmeth <- cvmeth_tst["default_cvmeth"]
-      }
+      cvmeth <- cvmeth_tst["default_cvmeth"]
     }
     lapply(meth, function(meth_i) {
       lapply(cvmeth, function(cvmeth_i) {
@@ -725,14 +850,23 @@ if (run_cvvs) {
           # `validate_search = FALSE`:
           meth_i <- c(meth_i, list(validate_search = FALSE))
         }
-        return(c(
-          nlist(tstsetup_ref), only_nonargs(args_ref[[tstsetup_ref]]),
-          list(
-            nclusters = nclusters_tst, nclusters_pred = nclusters_pred_tst,
-            nterms_max = nterms_max_tst, verbose = FALSE, seed = seed_tst
-          ),
-          meth_i, cvmeth_i
-        ))
+        search_trms <- search_trms_tst["default_search_trms"]
+        lapply(search_trms, function(search_trms_i) {
+          if (length(search_trms_i) &&
+              !identical(search_trms_i$search_terms,
+                         search_trms_tst$alltrms$search_terms)) {
+            nterms_max_tst <- count_terms_chosen(search_trms_i$search_terms) -
+              1L
+          }
+          return(c(
+            nlist(tstsetup_ref), only_nonargs(args_ref[[tstsetup_ref]]),
+            list(
+              nclusters = nclusters_tst, nclusters_pred = nclusters_pred_tst,
+              nterms_max = nterms_max_tst, verbose = FALSE, seed = seed_tst
+            ),
+            meth_i, cvmeth_i, search_trms_i
+          ))
+        })
       })
     })
   })
@@ -742,28 +876,46 @@ if (run_cvvs) {
   # diagnostics. Additionally to suppressWarnings(), suppressMessages() could be
   # used here (because of the refits in K-fold CV):
   cvvss <- suppressWarnings(lapply(args_cvvs, function(args_cvvs_i) {
-    do.call(cv_varsel, c(
+    cvvs_expr <- expression(do.call(cv_varsel, c(
       list(object = refmods[[args_cvvs_i$tstsetup_ref]]),
       excl_nonargs(args_cvvs_i)
-    ))
+    )))
+    if (args_cvvs_i$mod_nm == "gamm" &&
+        !identical(args_cvvs_i$cv_method, "kfold")) {
+      # Due to issue #239, we have to wrap the call to cv_varsel() in try():
+      return(try(eval(cvvs_expr), silent = TRUE))
+    } else {
+      return(eval(cvvs_expr))
+    }
   }))
+  success_cvvs <- !sapply(cvvss, inherits, "try-error")
+  err_ok <- sapply(cvvss[!success_cvvs], function(cvvs_err) {
+    attr(cvvs_err, "condition")$message ==
+      "Not enough (non-NA) data to do anything meaningful"
+  })
+  expect_true(
+    all(err_ok),
+    info = paste("Unexpected error for",
+                 paste(names(cvvss[!success_cvvs])[!err_ok], collapse = ", "))
+  )
+  cvvss <- cvvss[success_cvvs]
+  args_cvvs <- args_cvvs[success_cvvs]
 }
 
 ## Projection -------------------------------------------------------------
 
 ### From "refmodel" -------------------------------------------------------
 
-# Exclude the case which was added for K-fold CV only:
-tstsetups_prj_ref <- setNames(
-  nm = grep("\\.glm\\.gauss\\.stdformul\\.without_wobs", names(refmods),
-            value = TRUE, invert = TRUE)
-)
-args_prj <- lapply(tstsetups_prj_ref, function(tstsetup_ref) {
-  pkg_crr <- args_ref[[tstsetup_ref]]$pkg_nm
-  mod_crr <- args_ref[[tstsetup_ref]]$mod_nm
-  fam_crr <- args_ref[[tstsetup_ref]]$fam_nm
-  solterms <- nlist(empty = character(), solterms_x)
-  if (!grepl("\\.spclformul", tstsetup_ref)) {
+if (run_prj) {
+  tstsetups_prj_ref <- setNames(nm = names(refmods))
+  args_prj <- lapply(tstsetups_prj_ref, function(tstsetup_ref) {
+    pkg_crr <- args_ref[[tstsetup_ref]]$pkg_nm
+    mod_crr <- args_ref[[tstsetup_ref]]$mod_nm
+    fam_crr <- args_ref[[tstsetup_ref]]$fam_nm
+    if (grepl("\\.spclformul", tstsetup_ref)) {
+      solterms_x <- solterms_spcl
+    }
+    solterms <- nlist(empty = character(), solterms_x)
     if (mod_crr %in% c("glmm", "gamm")) {
       solterms <- c(solterms,
                     nlist(solterms_z, solterms_xz = c(solterms_x, solterms_z)))
@@ -777,50 +929,54 @@ args_prj <- lapply(tstsetups_prj_ref, function(tstsetup_ref) {
                     nlist(solterms_sz = c(solterms_s, solterms_z),
                           solterms_xsz = c(solterms_x, solterms_s, solterms_z)))
     }
-    if (fam_crr != "gauss") {
+    if (!run_more &&
+        (fam_crr != "gauss" || grepl("\\.spclformul", tstsetup_ref))) {
       solterms <- tail(solterms, 1)
     }
-  } else {
-    solterms <- nlist(solterms_spcl)
-  }
-  lapply(setNames(nm = names(solterms)), function(solterms_nm_i) {
-    if (pkg_crr == "rstanarm" && mod_crr == "glm" &&
-        fam_crr == "gauss" && solterms_nm_i == "solterms_x") {
-      ndr_ncl_pred <- ndr_ncl_pred_tst
-    } else if (pkg_crr == "rstanarm" && mod_crr == "glm" &&
-               fam_crr == "gauss" && solterms_nm_i == "empty") {
-      ndr_ncl_pred <- ndr_ncl_pred_tst[c("noclust", "clust", "clust1")]
-    } else if ((pkg_crr == "rstanarm" && mod_crr == "glmm" &&
-                fam_crr == "brnll" && solterms_nm_i == "solterms_xz") ||
-               (pkg_crr == "rstanarm" && mod_crr == "gam" &&
-                fam_crr == "binom" && solterms_nm_i == "solterms_xs") ||
-               (pkg_crr == "rstanarm" && mod_crr == "gamm" &&
-                fam_crr == "brnll" && solterms_nm_i == "solterms_xsz")) {
-      ndr_ncl_pred <- ndr_ncl_pred_tst[c("noclust", "clust")]
-    } else {
-      ndr_ncl_pred <- ndr_ncl_pred_tst[c("clust")]
-    }
-    lapply(ndr_ncl_pred, function(ndr_ncl_pred_i) {
-      return(c(
-        nlist(tstsetup_ref), only_nonargs(args_ref[[tstsetup_ref]]),
-        list(solution_terms = solterms[[solterms_nm_i]], seed = seed_tst),
-        ndr_ncl_pred_i
-      ))
+    lapply(setNames(nm = names(solterms)), function(solterms_nm_i) {
+      if (pkg_crr == "rstanarm" && mod_crr == "glm" &&
+          fam_crr == "gauss" && solterms_nm_i == "solterms_x") {
+        ndr_ncl_pred <- ndr_ncl_pred_tst
+      } else if (pkg_crr == "rstanarm" && mod_crr == "glm" &&
+                 fam_crr == "gauss" && solterms_nm_i == "empty") {
+        ndr_ncl_pred <- ndr_ncl_pred_tst[c("noclust", "clust", "clust1")]
+      } else if (
+        (run_more && (
+          (pkg_crr == "rstanarm" && mod_crr == "glmm" &&
+           fam_crr == "brnll" && solterms_nm_i == "solterms_xz") ||
+          (pkg_crr == "rstanarm" && mod_crr == "gam" &&
+           fam_crr == "binom" && solterms_nm_i == "solterms_xs") ||
+          (pkg_crr == "rstanarm" && mod_crr == "gamm" &&
+           fam_crr == "brnll" && solterms_nm_i == "solterms_xsz")
+        )) ||
+        (!run_more && mod_crr %in% c("glmm", "gam", "gamm"))
+      ) {
+        # The `noclust` setting is important for the test "non-clustered
+        # projection does not require a seed" in `test_project.R`.
+        ndr_ncl_pred <- ndr_ncl_pred_tst[c("noclust", "clust")]
+      } else {
+        ndr_ncl_pred <- ndr_ncl_pred_tst[c("clust")]
+      }
+      lapply(ndr_ncl_pred, function(ndr_ncl_pred_i) {
+        return(c(
+          nlist(tstsetup_ref), only_nonargs(args_ref[[tstsetup_ref]]),
+          list(solution_terms = solterms[[solterms_nm_i]], seed = seed_tst),
+          ndr_ncl_pred_i
+        ))
+      })
     })
   })
-})
-args_prj <- unlist_cust(args_prj)
+  args_prj <- unlist_cust(args_prj)
 
-prjs <- lapply(args_prj, function(args_prj_i) {
-  do.call(project, c(
-    list(object = refmods[[args_prj_i$tstsetup_ref]]),
-    excl_nonargs(args_prj_i)
-  ))
-})
+  prjs <- lapply(args_prj, function(args_prj_i) {
+    do.call(project, c(
+      list(object = refmods[[args_prj_i$tstsetup_ref]]),
+      excl_nonargs(args_prj_i)
+    ))
+  })
+}
 
 ### From "vsel" -----------------------------------------------------------
-
-#### varsel() -------------------------------------------------------------
 
 # A helper function to create the argument list for project() for a given
 # character vector of test setups (referring to either `vss` or `cvvss`):
@@ -836,8 +992,20 @@ cre_args_prj_vsel <- function(tstsetups_prj_vsel) {
       list(nclusters = nclusters_pred_tst, seed = seed_tst)
     )
     if (args_obj[[tstsetup_vsel]]$mod_nm != "glm" ||
+        !is.null(args_obj[[tstsetup_vsel]]$search_terms) ||
         grepl("\\.spclformul", tstsetup_vsel)) {
       nterms_avail <- nterms_avail["subvec"]
+    }
+    if (!is.null(args_obj[[tstsetup_vsel]]$search_terms)) {
+      nterms_max_cut <- args_obj[[tstsetup_vsel]]$nterms_max
+      if (all(grepl("\\+", args_obj[[tstsetup_vsel]]$search_terms))) {
+        # This is the "empty_size" setting, so we have to subtract the skipped
+        # model size (see issue #307):
+        nterms_max_cut <- nterms_max_cut - 1L
+      }
+      nterms_avail <- lapply(nterms_avail, function(nterms_avail_i) {
+        pmin(nterms_avail_i, nterms_max_cut)
+      })
     }
     lapply(nterms_avail, function(nterms_crr) {
       if (!is.null(nterms_crr)) {
@@ -848,13 +1016,31 @@ cre_args_prj_vsel <- function(tstsetups_prj_vsel) {
   })
 }
 
+#### varsel() -------------------------------------------------------------
+
 if (run_vs) {
-  tstsetups_prj_vs <- setNames(
-    nm = unlist(lapply(mod_nms, function(mod_nm) {
-      grep(paste0("\\.", mod_nm, "\\.gauss\\..*\\.default_meth"), names(vss),
-           value = TRUE)
-    }))
+  tstsetups_prj_vs <- unlist(lapply(mod_nms, function(mod_nm) {
+    if (any(grepl(paste0("\\.", mod_nm, "\\.gauss\\."), names(vss)))) {
+      tstsetups_out <- grep(
+        paste0("\\.", mod_nm, "\\.gauss\\..*\\.default_meth"), names(vss),
+        value = TRUE
+      )
+    } else {
+      tstsetups_out <- grep(
+        paste0("\\.", mod_nm, "\\..*\\.default_meth"), names(vss),
+        value = TRUE
+      )
+    }
+    if (!run_more) {
+      tstsetups_out <- head(tstsetups_out, 1)
+    }
+    return(tstsetups_out)
+  }))
+  tstsetups_prj_vs <- union(
+    tstsetups_prj_vs,
+    grep("\\.default_search_trms", names(vss), value = TRUE, invert = TRUE)
   )
+  tstsetups_prj_vs <- setNames(nm = tstsetups_prj_vs)
   stopifnot(length(tstsetups_prj_vs) > 0)
   args_prj_vs <- cre_args_prj_vsel(tstsetups_prj_vs)
   args_prj_vs <- unlist_cust(args_prj_vs)
@@ -870,14 +1056,29 @@ if (run_vs) {
 #### cv_varsel() ----------------------------------------------------------
 
 if (run_cvvs) {
-  tstsetups_prj_cvvs <- setNames(
-    nm = unlist(lapply(mod_nms, function(mod_nm) {
-      grep(
-        paste0("\\.", mod_nm, "\\.gauss\\..*\\.default_meth\\.default_cvmeth"),
+  tstsetups_prj_cvvs <- unlist(lapply(mod_nms, function(mod_nm) {
+    if (any(grepl(paste0("\\.", mod_nm, "\\.gauss\\."), names(cvvss)))) {
+      tstsetups_out <- grep(
+        paste0("\\.", mod_nm,
+               "\\.gauss\\..*\\.default_meth\\.default_cvmeth"),
         names(cvvss), value = TRUE
       )
-    }))
+    } else {
+      tstsetups_out <- grep(
+        paste0("\\.", mod_nm, "\\..*\\.default_meth\\.default_cvmeth"),
+        names(cvvss), value = TRUE
+      )
+    }
+    if (!run_more) {
+      tstsetups_out <- head(tstsetups_out, 1)
+    }
+    return(tstsetups_out)
+  }))
+  tstsetups_prj_cvvs <- union(
+    tstsetups_prj_cvvs,
+    grep("\\.default_search_trms", names(cvvss), value = TRUE, invert = TRUE)
   )
+  tstsetups_prj_cvvs <- setNames(nm = tstsetups_prj_cvvs)
   stopifnot(length(tstsetups_prj_cvvs) > 0)
   args_prj_cvvs <- cre_args_prj_vsel(tstsetups_prj_cvvs)
   args_prj_cvvs <- unlist_cust(args_prj_cvvs)
@@ -898,8 +1099,10 @@ if (run_cvvs) {
 
 ### From "projection" -----------------------------------------------------
 
-pls <- lapply(prjs, proj_linpred)
-pps <- lapply(prjs, proj_predict, .seed = seed2_tst)
+if (run_prj) {
+  pls <- lapply(prjs, proj_linpred)
+  pps <- lapply(prjs, proj_predict, .seed = seed2_tst)
+}
 
 ### From "proj_list" ------------------------------------------------------
 
@@ -919,14 +1122,34 @@ if (run_cvvs) {
 
 ## summary.vsel() ---------------------------------------------------------
 
-### varsel() --------------------------------------------------------------
+cre_args_smmry_vsel <- function(args_obj) {
+  tstsetups <- names(args_obj)
+  # Choose all test setups which are for special `search_terms` settings:
+  tstsetups_smmry_vsel <- tstsetups[sapply(tstsetups, function(tstsetup_vsel) {
+    !is.null(args_obj[[tstsetup_vsel]]$search_terms)
+  })]
 
-cre_args_smmry_vsel <- function(tstsetups_smmry_vsel) {
-  vsel_type <- deparse(substitute(tstsetups_smmry_vsel))
-  args_obj <- switch(vsel_type,
-                     "tstsetups_smmry_vs" = args_vs,
-                     "tstsetups_smmry_cvvs" = args_cvvs,
-                     stop("Unexpected `vsel_type`."))
+  # Ensure that from each model type (`mod_nm`) and each family (`fam_nm`), we
+  # have at least one test setup:
+  mods_fams_existing <- sapply(tstsetups_smmry_vsel, function(tstsetup_vsel) {
+    paste0(args_obj[[tstsetup_vsel]]$mod_nm, ".",
+           args_obj[[tstsetup_vsel]]$fam_nm)
+  })
+  mods_fams_possible <- apply(expand.grid(mod_nms, fam_nms), 1, paste,
+                              collapse = ".")
+  mods_fams_missing <- setdiff(mods_fams_possible, mods_fams_existing)
+  tstsetups_smmry_vsel <- union(
+    tstsetups_smmry_vsel,
+    unlist(lapply(mods_fams_missing, function(mod_fam) {
+      head(
+        grep(paste0(".", mod_fam, "."), tstsetups, value = TRUE, fixed = TRUE),
+        1
+      )
+    }))
+  )
+
+  tstsetups_smmry_vsel <- setNames(nm = tstsetups_smmry_vsel)
+  stopifnot(length(tstsetups_smmry_vsel) > 0)
   lapply(tstsetups_smmry_vsel, function(tstsetup_vsel) {
     mod_crr <- args_obj[[tstsetup_vsel]]$mod_nm
     fam_crr <- args_obj[[tstsetup_vsel]]$fam_nm
@@ -936,12 +1159,26 @@ cre_args_smmry_vsel <- function(tstsetups_smmry_vsel) {
                                        "binom" = "binom_stats",
                                        "common_stats"),
                         character())
+    if (!run_more && !is.null(args_obj[[tstsetup_vsel]]$search_terms)) {
+      add_stats <- character()
+    }
     stats_tst <- stats_tst[c("default_stats", add_stats)]
     lapply(stats_tst, function(stats_crr) {
-      if (mod_crr == "glm" && fam_crr == "gauss" && length(stats_crr) == 0) {
-        nterms_tst <- nterms_avail[c("default_nterms", "single")]
+      if (!run_more) {
+        if (!is.null(args_obj[[tstsetup_vsel]]$search_terms)) {
+          nterms_tst <- nterms_max_smmry["default_nterms_max_smmry"]
+        } else {
+          nterms_tst <- nterms_max_smmry["halfway"]
+        }
       } else {
-        nterms_tst <- nterms_avail["default_nterms"]
+        if (mod_crr == "glm" && fam_crr == "gauss" &&
+            is.null(args_obj[[tstsetup_vsel]]$search_terms) &&
+            length(stats_crr) == 0) {
+          nterms_tst <- nterms_max_smmry[c("default_nterms_max_smmry",
+                                           "halfway")]
+        } else {
+          nterms_tst <- nterms_max_smmry["default_nterms_max_smmry"]
+        }
       }
       lapply(nterms_tst, function(nterms_crr) {
         return(c(
@@ -954,15 +1191,10 @@ cre_args_smmry_vsel <- function(tstsetups_smmry_vsel) {
   })
 }
 
+### varsel() --------------------------------------------------------------
+
 if (run_vs) {
-  tstsetups_smmry_vs <- setNames(nm = unlist(lapply(mod_nms, function(mod_nm) {
-    unlist(lapply(fam_nms, function(fam_nm) {
-      head(grep(paste0("\\.", mod_nm, "\\.", fam_nm), names(vss), value = TRUE),
-           1)
-    }))
-  })))
-  stopifnot(length(tstsetups_smmry_vs) > 0)
-  args_smmry_vs <- cre_args_smmry_vsel(tstsetups_smmry_vs)
+  args_smmry_vs <- cre_args_smmry_vsel(args_vs)
   args_smmry_vs <- unlist_cust(args_smmry_vs)
 
   smmrys_vs <- lapply(args_smmry_vs, function(args_smmry_vs_i) {
@@ -982,17 +1214,7 @@ if (run_vs) {
 ### cv_varsel() -----------------------------------------------------------
 
 if (run_cvvs) {
-  tstsetups_smmry_cvvs <- setNames(
-    nm = unlist(lapply(mod_nms, function(mod_nm) {
-      unlist(lapply(fam_nms, function(fam_nm) {
-        head(grep(paste0("\\.", mod_nm, "\\.", fam_nm), names(cvvss),
-                  value = TRUE),
-             1)
-      }))
-    }))
-  )
-  stopifnot(length(tstsetups_smmry_cvvs) > 0)
-  args_smmry_cvvs <- cre_args_smmry_vsel(tstsetups_smmry_cvvs)
+  args_smmry_cvvs <- cre_args_smmry_vsel(args_cvvs)
   args_smmry_cvvs <- unlist_cust(args_smmry_cvvs)
 
   smmrys_cvvs <- lapply(args_smmry_cvvs, function(args_smmry_cvvs_i) {
@@ -1014,21 +1236,19 @@ if (run_cvvs) {
 vsel_nms <- c(
   "refmodel", "search_path", "d_test", "summaries", "solution_terms", "kl",
   "nterms_max", "nterms_all", "method", "cv_method", "validate_search",
-  "ndraws", "ndraws_pred", "nclusters", "nclusters_pred", "suggested_size",
-  "summary"
+  "clust_used_search", "clust_used_eval", "nprjdraws_search", "nprjdraws_eval",
+  "suggested_size", "summary"
 )
 vsel_nms_cv <- c(
   "refmodel", "search_path", "d_test", "summaries", "kl", "solution_terms",
   "pct_solution_terms_cv", "nterms_all", "nterms_max", "method", "cv_method",
-  "validate_search", "nclusters", "nclusters_pred", "ndraws", "ndraws_pred",
-  "suggested_size", "summary"
+  "validate_search", "clust_used_search", "clust_used_eval", "nprjdraws_search",
+  "nprjdraws_eval", "suggested_size", "summary"
 )
 # Related to prediction (in contrast to selection):
 vsel_nms_pred <- c("summaries", "solution_terms", "kl", "suggested_size",
                    "summary")
 vsel_nms_pred_opt <- c("solution_terms", "suggested_size")
-# Related to `d_test`:
-vsel_nms_dtest <- c("d_test", setdiff(vsel_nms_pred, c("solution_terms", "kl")))
 # Related to `nloo`:
 vsel_nms_cv_nloo <- c("summaries", "pct_solution_terms_cv", "suggested_size",
                       "summary")
@@ -1039,14 +1259,20 @@ vsel_nms_cv_valsearch <- c("validate_search", "summaries",
                            "summary")
 vsel_nms_cv_valsearch_opt <- c("suggested_size")
 # Related to `cvfits`:
-vsel_nms_cv_cvfits <- c("refmodel", "d_test", "summaries",
-                        "pct_solution_terms_cv", "summary", "suggested_size")
+vsel_nms_cv_cvfits <- c("refmodel", "summaries", "pct_solution_terms_cv",
+                        "summary", "suggested_size")
 vsel_nms_cv_cvfits_opt <- c("pct_solution_terms_cv", "suggested_size")
 vsel_smmrs_sub_nms <- vsel_smmrs_ref_nms <- c("mu", "lppd")
 
 ## Defaults ---------------------------------------------------------------
 
-ndraws_default <- 20L # Adapt this if the default is changed.
-ndraws_pred_default <- 400L # Adapt this if the default is changed.
-nresample_clusters_default <- 1000L # Adapt this if the default is changed.
-regul_default <- 1e-4 # Adapt this if the default is changed.
+nclusters_default <- 20L
+ndraws_pred_default <- 400L
+nresample_clusters_default <- 1000L
+regul_default <- 1e-4
+
+# Seed --------------------------------------------------------------------
+
+if (run_randRNG) {
+  set.seed(NULL)
+}

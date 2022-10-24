@@ -1,30 +1,32 @@
 Package: projpredarma
 Encoding: UTF-8
 Title: Projection Predictive Feature Selection
-Version: 2.0.5.9000
-Date: 2021-09-21
+Version: 2.2.1.9000
+Date: 2022-09-20
 Authors@R: c(person("Juho", "Piironen", role = c("aut"),
                     email = "juho.t.piironen@gmail.com"),
              person("Markus", "Paasiniemi", role = "aut"),
-             person("Alejandro", "Catalina", role = c("cre", "aut"),
+             person("Alejandro", "Catalina", role = "aut",
                     email = "alecatfel@gmail.com"),
+             person("Frank", "Weber", role = c("cre", "aut"),
+                    email = "fweber144@protonmail.com"),
              person("Aki", "Vehtari", role = "aut"),
              person("Jonah", "Gabry", role = "ctb"),
              person("Marco", "Colombo", role = "ctb"),
              person("Paul-Christian", "Bürkner", role = "ctb"),
              person("Hamada S.", "Badr", role = "ctb"),
-             person("Frank", "Weber", role = "ctb"))
-Maintainer:
-    Alejandro Catalina <alecatfel@gmail.com>
+             person("Brian", "Sullivan", role = "ctb"),
+             person("Sölvi", "Rögnvaldsson", role = "ctb"))
 Description:
-    Performs projection predictive feature selection for generalized linear
-    models and generalized linear and additive multilevel models (see Piironen,
-    Paasiniemi and Vehtari, 2020, <doi:10.1214/20-EJS1711>; Catalina, Bürkner
-    and Vehtari, 2020, <arXiv:2010.06994>). The package is compatible with the
-    'rstanarm' and 'brms' packages, but other reference models can also be used.
-    See the documentation as well as the package vignette for more information
-    and examples.
-License: GPL-3
+    Performs projection predictive feature selection for generalized linear and
+    additive models as well as for generalized linear and additive multilevel
+    models (see Piironen, Paasiniemi and Vehtari, 2020,
+    <doi:10.1214/20-EJS1711>; Catalina, Bürkner and Vehtari, 2020,
+    <arXiv:2010.06994>). The package is compatible with the 'rstanarm' and
+    'brms' packages, but other reference models can also be used. See the
+    documentation as well as the package vignette for more information and
+    examples.
+License: GPL-3 | file LICENSE
 URL: https://mc-stan.org/projpred/, https://discourse.mc-stan.org
 BugReports: https://github.com/stan-dev/projpred/issues/
 Depends:
@@ -35,12 +37,14 @@ Imports:
     loo (>= 2.0.0),
     rstantools (>= 2.0.0),
     lme4,
+    mvtnorm,
     ggplot2,
     Rcpp,
     utils,
     magrittr,
     mgcv,
     gamm4,
+    MASS,
     rlang
 Suggests:
     rstanarm,
@@ -49,7 +53,9 @@ Suggests:
     knitr,
     rmarkdown,
     glmnet,
+    cmdstanr,
     bayesplot (>= 1.5.0),
+    nlme,
     optimx,
     posterior,
     parallel,
@@ -60,6 +66,8 @@ Suggests:
     future.callr,
     doFuture
 LinkingTo: Rcpp, RcppArmadillo
+Additional_repositories:
+    https://mc-stan.org/r-packages/
 LazyData: TRUE
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.2.1

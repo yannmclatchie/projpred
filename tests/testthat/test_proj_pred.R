@@ -5,6 +5,7 @@ context("proj_linpred()")
 ## object -----------------------------------------------------------------
 
 test_that("pl: `object` of class \"projection\" works", {
+  skip_if_not(run_prj)
   for (tstsetup in names(prjs)) {
     pl_tester(pls[[tstsetup]],
               nprjdraws_expected = ndr_ncl_dtls(args_prj[[tstsetup]])$nprjdraws,
@@ -16,7 +17,7 @@ test_that("pl: `object` of class \"projection\" works", {
         print(tstsetup)
         print(rlang::hash(pls[[tstsetup]]))
       })
-      options(width = width_orig$width)
+      options(width_orig)
       if (testthat_ed_max2) local_edition(2)
     }
   }
@@ -44,7 +45,7 @@ test_that(paste(
         print(tstsetup)
         print(rlang::hash(pls_vs[[tstsetup]]))
       })
-      options(width = width_orig$width)
+      options(width_orig)
       if (testthat_ed_max2) local_edition(2)
     }
   }
@@ -72,7 +73,7 @@ test_that(paste(
         print(tstsetup)
         print(rlang::hash(pls_cvvs[[tstsetup]]))
       })
-      options(width = width_orig$width)
+      options(width_orig)
       if (testthat_ed_max2) local_edition(2)
     }
   }
@@ -81,6 +82,7 @@ test_that(paste(
 test_that(paste(
   "`object` of (informal) class \"proj_list\" (created manually) works"
 ), {
+  skip_if_not(run_prj)
   tstsetups <- grep("\\.glm\\.gauss\\..*\\.clust$", names(prjs), value = TRUE)
   stopifnot(length(tstsetups) > 1)
   pl <- proj_linpred(prjs[tstsetups])
@@ -92,6 +94,7 @@ test_that(paste(
 test_that(paste(
   "`object` of class \"refmodel\" and passing arguments to project() works"
 ), {
+  skip_if_not(run_prj)
   tstsetups <- grep("\\.glm\\.gauss.*\\.solterms_x\\.clust$", names(prjs),
                     value = TRUE)
   for (tstsetup in tstsetups) {
@@ -109,6 +112,7 @@ test_that(paste(
   "`object` of class \"stanreg\" or \"brmsfit\" and passing arguments to",
   "project() works"
 ), {
+  skip_if_not(run_prj)
   tstsetups <- grep("\\.glm\\.gauss.*\\.solterms_x\\.clust$", names(prjs),
                     value = TRUE)
   for (tstsetup in tstsetups) {
@@ -127,7 +131,7 @@ test_that(paste(
   "to project() works"
 ), {
   skip_if_not(run_vs)
-  tstsetups <- head(grep("\\.glm\\.gauss.*\\.default_meth\\.subvec",
+  tstsetups <- head(grep("\\.glm\\.gauss.*\\.default_meth\\..*\\.subvec",
                          names(prjs_vs), value = TRUE),
                     1)
   for (tstsetup in tstsetups) {
@@ -147,7 +151,7 @@ test_that(paste(
 ), {
   skip_if_not(run_cvvs)
   tstsetups <- head(
-    grep("\\.glm\\.gauss.*\\.default_meth\\.default_cvmeth\\.subvec",
+    grep("\\.glm\\.gauss.*\\.default_meth\\.default_cvmeth\\..*\\.subvec",
          names(prjs_cvvs), value = TRUE),
     1
   )
@@ -178,16 +182,19 @@ test_that("`object` not of class \"vsel\" and missing `solution_terms` fails", {
     paste("^Please provide an `object` of class \"vsel\" or use argument",
           "`solution_terms`\\.$")
   )
-  expect_error(
-    proj_linpred(c(prjs, list(dat))),
-    paste("Please provide an `object` of class \"vsel\" or use argument",
-          "`solution_terms`\\.")
-  )
+  if (run_prj) {
+    expect_error(
+      proj_linpred(c(prjs, list(dat))),
+      paste("Please provide an `object` of class \"vsel\" or use argument",
+            "`solution_terms`\\.")
+    )
+  }
 })
 
 ## newdata and integrated -------------------------------------------------
 
 test_that("invalid `newdata` fails", {
+  skip_if_not(run_prj)
   expect_error(
     proj_linpred(prjs, newdata = dat[, 1]),
     "must be a data\\.frame or a matrix"
@@ -197,11 +204,12 @@ test_that("invalid `newdata` fails", {
     proj_linpred(prjs[[head(grep("\\.glm\\.gauss.*\\.solterms_x", names(prjs)),
                             1)]],
                  newdata = dat[, head(solterms_x, -1), drop = FALSE]),
-    "^object 'xco\\.1' not found$"
+    "^object '.*' not found$"
   )
 })
 
 test_that("`newdata` and `integrated` work (even in edge cases)", {
+  skip_if_not(run_prj)
   for (tstsetup in names(prjs)) {
     ndr_ncl <- ndr_ncl_dtls(args_prj[[tstsetup]])
     dat_crr <- get_dat(tstsetup)
@@ -230,6 +238,7 @@ test_that("`newdata` and `integrated` work (even in edge cases)", {
 })
 
 test_that("`newdata` set to the original dataset doesn't change results", {
+  skip_if_not(run_prj)
   for (tstsetup in names(prjs)) {
     dat_crr <- get_dat(tstsetup)
     pl_newdata <- proj_linpred(prjs[[tstsetup]], newdata = dat_crr)
@@ -243,6 +252,7 @@ test_that(paste(
   "reference models) causes output element `lpd` to be `NULL` but doesn't",
   "change results otherwise"
 ), {
+  skip_if_not(run_prj)
   for (tstsetup in names(prjs)) {
     if (args_prj[[tstsetup]]$pkg_nm == "brms") {
       next
@@ -269,6 +279,7 @@ test_that(paste(
 ## weightsnew -------------------------------------------------------------
 
 test_that("`weightsnew` works", {
+  skip_if_not(run_prj)
   for (tstsetup in names(prjs)) {
     ndr_ncl <- ndr_ncl_dtls(args_prj[[tstsetup]])
     pl_orig <- pls[[tstsetup]]
@@ -355,6 +366,7 @@ test_that("`weightsnew` works", {
 ## offsetnew --------------------------------------------------------------
 
 test_that("`offsetnew` works", {
+  skip_if_not(run_prj)
   for (tstsetup in names(prjs)) {
     ndr_ncl <- ndr_ncl_dtls(args_prj[[tstsetup]])
     pl_orig <- pls[[tstsetup]]
@@ -429,6 +441,7 @@ test_that("`offsetnew` works", {
 ## transform --------------------------------------------------------------
 
 test_that("`transform` works", {
+  skip_if_not(run_prj)
   for (tstsetup in names(prjs)) {
     ndr_ncl <- ndr_ncl_dtls(args_prj[[tstsetup]])
     pl_false <- pls[[tstsetup]]
@@ -445,6 +458,7 @@ test_that("`transform` works", {
 ## regul ------------------------------------------------------------------
 
 test_that("`regul` works", {
+  skip_if_not(run_prj)
   regul_tst <- c(1e-6, 1e-1, 1e2)
   stopifnot(identical(regul_tst, sort(regul_tst)))
   tstsetups <- grep("\\.glm\\..*\\.solterms_x\\.clust$", names(prjs),
@@ -472,6 +486,7 @@ test_that("`regul` works", {
 ## filter_nterms ----------------------------------------------------------
 
 test_that("`filter_nterms` works (for an `object` of class \"projection\")", {
+  skip_if_not(run_prj)
   tstsetups <- grep("\\.glm\\.gauss.*\\.solterms_x\\.clust$", names(prjs),
                     value = TRUE)
   for (tstsetup in tstsetups) {
@@ -495,8 +510,8 @@ test_that(paste(
   "`filter_nterms` works (for an `object` of (informal) class \"proj_list\")"
 ), {
   skip_if_not(run_vs)
-  tstsetups <- grep("\\.glm\\.gauss.*\\.default_meth\\.full$", names(prjs_vs),
-                    value = TRUE)
+  tstsetups <- grep("\\.glm\\.gauss.*\\.default_meth\\..*\\.full$",
+                    names(prjs_vs), value = TRUE)
   for (tstsetup in tstsetups) {
     # Unavailable number(s) of terms:
     for (filter_nterms_crr in nterms_unavail) {
@@ -537,6 +552,7 @@ test_that(paste(
   "a single observation and a single draw work (which implicitly tests",
   "this edge case for family$ll_fun(), too)"
 ), {
+  skip_if_not(run_prj)
   for (tstsetup in names(prjs)) {
     if (args_prj[[tstsetup]]$mod_nm == "gamm") {
       # TODO (GAMMs): Fix this.
@@ -561,6 +577,7 @@ context("proj_predict()")
 ## seed -------------------------------------------------------------------
 
 test_that("`.seed` works (and restores the RNG state afterwards)", {
+  skip_if_not(run_prj)
   for (tstsetup in names(prjs)) {
     .Random.seed_orig1 <- .Random.seed
     pp_orig <- pps[[tstsetup]]
@@ -603,6 +620,7 @@ test_that("`.seed` works (and restores the RNG state afterwards)", {
 ## object -----------------------------------------------------------------
 
 test_that("pp: `object` of class \"projection\" works", {
+  skip_if_not(run_prj)
   for (tstsetup in names(prjs)) {
     pp_tester(pps[[tstsetup]],
               nprjdraws_out_expected =
@@ -615,7 +633,7 @@ test_that("pp: `object` of class \"projection\" works", {
         print(tstsetup)
         print(rlang::hash(pps[[tstsetup]]))
       })
-      options(width = width_orig$width)
+      options(width_orig)
       if (testthat_ed_max2) local_edition(2)
     }
   }
@@ -643,7 +661,7 @@ test_that(paste(
         print(tstsetup)
         print(rlang::hash(pps_vs[[tstsetup]]))
       })
-      options(width = width_orig$width)
+      options(width_orig)
       if (testthat_ed_max2) local_edition(2)
     }
   }
@@ -671,7 +689,7 @@ test_that(paste(
         print(tstsetup)
         print(rlang::hash(pps_cvvs[[tstsetup]]))
       })
-      options(width = width_orig$width)
+      options(width_orig)
       if (testthat_ed_max2) local_edition(2)
     }
   }
@@ -680,6 +698,7 @@ test_that(paste(
 test_that(paste(
   "`object` of (informal) class \"proj_list\" (created manually) works"
 ), {
+  skip_if_not(run_prj)
   tstsetups <- grep("\\.glm\\.gauss\\..*\\.clust$", names(prjs), value = TRUE)
   stopifnot(length(tstsetups) > 1)
   pp <- proj_predict(prjs[tstsetups], .seed = seed2_tst)
@@ -691,6 +710,7 @@ test_that(paste(
 test_that(paste(
   "`object` of class \"refmodel\" and passing arguments to project() works"
 ), {
+  skip_if_not(run_prj)
   tstsetups <- grep("\\.glm\\.gauss.*\\.solterms_x\\.clust$", names(prjs),
                     value = TRUE)
   for (tstsetup in tstsetups) {
@@ -709,6 +729,7 @@ test_that(paste(
   "`object` of class \"stanreg\" or \"brmsfit\" and passing arguments to",
   "project() works"
 ), {
+  skip_if_not(run_prj)
   tstsetups <- grep("\\.glm\\.gauss.*\\.solterms_x\\.clust$", names(prjs),
                     value = TRUE)
   for (tstsetup in tstsetups) {
@@ -728,7 +749,7 @@ test_that(paste(
   "to project() works"
 ), {
   skip_if_not(run_vs)
-  tstsetups <- head(grep("\\.glm\\.gauss.*\\.default_meth\\.subvec",
+  tstsetups <- head(grep("\\.glm\\.gauss.*\\.default_meth\\..*\\.subvec",
                          names(prjs_vs), value = TRUE),
                     1)
   for (tstsetup in tstsetups) {
@@ -749,7 +770,7 @@ test_that(paste(
 ), {
   skip_if_not(run_cvvs)
   tstsetups <- head(
-    grep("\\.glm\\.gauss.*\\.default_meth\\.default_cvmeth\\.subvec",
+    grep("\\.glm\\.gauss.*\\.default_meth\\.default_cvmeth\\..*\\.subvec",
          names(prjs_cvvs), value = TRUE),
     1
   )
@@ -781,16 +802,19 @@ test_that("`object` not of class \"vsel\" and missing `solution_terms` fails", {
     paste("^Please provide an `object` of class \"vsel\" or use argument",
           "`solution_terms`\\.$")
   )
-  expect_error(
-    proj_predict(c(prjs, list(dat)), .seed = seed2_tst),
-    paste("Please provide an `object` of class \"vsel\" or use argument",
-          "`solution_terms`\\.")
-  )
+  if (run_prj) {
+    expect_error(
+      proj_predict(c(prjs, list(dat)), .seed = seed2_tst),
+      paste("Please provide an `object` of class \"vsel\" or use argument",
+            "`solution_terms`\\.")
+    )
+  }
 })
 
 ## newdata and nresample_clusters -----------------------------------------
 
 test_that("invalid `newdata` fails", {
+  skip_if_not(run_prj)
   expect_error(
     proj_predict(prjs, newdata = dat[, 1], .seed = seed2_tst),
     "must be a data\\.frame or a matrix"
@@ -802,11 +826,12 @@ test_that("invalid `newdata` fails", {
                  newdata = dat[, head(solterms_x, -1), drop = FALSE],
                  .seed = seed2_tst,
                  solution_terms = solterms_x),
-    "^object 'xco\\.1' not found$"
+    "^object '.*' not found$"
   )
 })
 
 test_that("`newdata` and `nresample_clusters` work (even in edge cases)", {
+  skip_if_not(run_prj)
   for (tstsetup in names(prjs)) {
     for (nobsv_crr in nobsv_tst) {
       if (args_prj[[tstsetup]]$mod_nm == "gamm") {
@@ -831,6 +856,7 @@ test_that("`newdata` and `nresample_clusters` work (even in edge cases)", {
 })
 
 test_that("`newdata` set to the original dataset doesn't change results", {
+  skip_if_not(run_prj)
   for (tstsetup in names(prjs)) {
     pp_newdata <- proj_predict(prjs[[tstsetup]],
                                newdata = dat,
@@ -844,6 +870,7 @@ test_that(paste(
   "omitting the response in `newdata` (not possible for `\"brmsfit\"`-based",
   "reference models) doesn't change results"
 ), {
+  skip_if_not(run_prj)
   for (tstsetup in names(prjs)) {
     if (args_prj[[tstsetup]]$pkg_nm == "brms") {
       next
@@ -863,11 +890,13 @@ test_that(paste(
 ## weightsnew -------------------------------------------------------------
 
 test_that("`weightsnew` works", {
+  skip_if_not(run_prj)
   for (tstsetup in names(prjs)) {
     ndr_ncl <- ndr_ncl_dtls(args_prj[[tstsetup]])
     pp_orig <- pps[[tstsetup]]
     if (!(args_prj[[tstsetup]]$pkg_nm == "brms" &&
           args_prj[[tstsetup]]$fam_nm == "binom")) {
+      # TODO (brms): Fix or document why this doesn't work for "brmsfit"s.
       pp_ones <- proj_predict(prjs[[tstsetup]],
                               newdata = dat_wobs_ones,
                               weightsnew = ~ wobs_col_ones,
@@ -885,6 +914,7 @@ test_that("`weightsnew` works", {
               info_str = tstsetup)
     if (!(args_prj[[tstsetup]]$pkg_nm == "brms" &&
           args_prj[[tstsetup]]$fam_nm == "binom")) {
+      # TODO (brms): Fix or document why this doesn't work for "brmsfit"s.
       ppw <- proj_predict(prjs[[tstsetup]],
                           newdata = dat_wobs_new,
                           weightsnew = ~ wobs_col_new,
@@ -929,6 +959,7 @@ test_that("`weightsnew` works", {
 ## offsetnew --------------------------------------------------------------
 
 test_that("`offsetnew` works", {
+  skip_if_not(run_prj)
   for (tstsetup in names(prjs)) {
     ndr_ncl <- ndr_ncl_dtls(args_prj[[tstsetup]])
     pp_orig <- pps[[tstsetup]]
@@ -1006,6 +1037,7 @@ test_that("`offsetnew` works", {
 ## filter_nterms ----------------------------------------------------------
 
 test_that("`filter_nterms` works (for an `object` of class \"projection\")", {
+  skip_if_not(run_prj)
   tstsetups <- grep("\\.glm\\.gauss.*\\.solterms_x\\.clust$", names(prjs),
                     value = TRUE)
   for (tstsetup in tstsetups) {
@@ -1031,8 +1063,8 @@ test_that(paste(
   "`filter_nterms` works (for an `object` of (informal) class \"proj_list\")"
 ), {
   skip_if_not(run_vs)
-  tstsetups <- grep("\\.glm\\.gauss.*\\.default_meth\\.full$", names(prjs_vs),
-                    value = TRUE)
+  tstsetups <- grep("\\.glm\\.gauss.*\\.default_meth\\..*\\.full$",
+                    names(prjs_vs), value = TRUE)
   for (tstsetup in tstsetups) {
     # Unavailable number(s) of terms:
     for (filter_nterms_crr in nterms_unavail) {
@@ -1075,6 +1107,7 @@ test_that(paste(
   "a single observation and a single draw work (which implicitly tests",
   "this edge case for family$ppd(), too)"
 ), {
+  skip_if_not(run_prj)
   for (tstsetup in names(prjs)) {
     if (args_prj[[tstsetup]]$mod_nm == "gamm") {
       # TODO (GAMMs): Fix this.

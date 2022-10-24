@@ -10,7 +10,7 @@ bibentry(
   author = authors,
   year = year,
   note = note,
-  url = "https://mc-stan.org/projpred",
+  url = "https://mc-stan.org/projpred/",
   header = "To cite the 'projpred' R package:",
   encoding = "UTF-8"
 )
@@ -58,6 +58,7 @@ bibentry(
   ),
   year = "2020",
   note = "arXiv:2010.06994",
+  url = "https://arxiv.org/abs/2010.06994",
   header = "To cite the 'projpred' GLMMs and GAMMs paper:",
   encoding = "UTF-8"
 )
