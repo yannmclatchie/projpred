@@ -1,6 +1,6 @@
 #' Projection predictive feature selection
 #'
-#' @useDynLib projpredarma
+#' @useDynLib projpred
 #' @importFrom Rcpp sourceCpp
 #'
 #' @import stats
